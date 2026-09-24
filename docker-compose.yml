@@ -1,0 +1,17 @@
+services:
+  bypass-aigc:
+    image: bypass-aigc:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: bypass-aigc
+    restart: unless-stopped
+    ports:
+      - "9800:9800"
+    volumes:
+      - ./data:/app/data
+      - ./package/.env:/app/.env
+      - ./package/ai_polish.db:/app/ai_polish.db
+    environment:
+      - SERVER_HOST=0.0.0.0
+      - SERVER_PORT=9800

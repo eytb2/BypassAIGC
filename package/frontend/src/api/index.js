@@ -265,4 +265,36 @@ export const wordFormatterAPI = {
   },
 };
 
+// ============ Word Optimization API ============
+export const wordOptAPI = {
+  uploadDocx: (file, processingMode = 'paper_polish_enhance', cardKey = null) => {
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('processing_mode', processingMode);
+    return api.post('/word-opt/upload', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      params: {
+        ...(cardKey ? { card_key: cardKey } : {}),
+        processing_mode: processingMode,
+      },
+      timeout: 90000,
+    });
+  },
+  getSession: (sessionId) => api.get(`/word-opt/session/${sessionId}`),
+  getSessionProgress: (sessionId) => api.get(`/word-opt/session/${sessionId}/progress`),
+  generateSuggestion: (sessionId, sentenceId, force = false) =>
+    api.post(`/word-opt/session/${sessionId}/generate-suggestion`, { sentence_id: sentenceId, force }, { timeout: 60000 }),
+  applySuggestion: (sessionId, sentenceId, selectedText, suggestionId) =>
+    api.post(`/word-opt/session/${sessionId}/apply`, {
+      sentence_id: sentenceId,
+      selected_text: selectedText,
+      suggestion_id: suggestionId,
+    }),
+  restoreSentence: (sessionId, sentenceId) =>
+    api.post(`/word-opt/session/${sessionId}/restore`, { sentence_id: sentenceId }),
+  exportDocxUrl: (sessionId) => `/api/word-opt/session/${sessionId}/export`,
+  listSessions: () => api.get('/word-opt/sessions'),
+  deleteSession: (sessionId) => api.delete(`/word-opt/session/${sessionId}`),
+};
+
 export default api;

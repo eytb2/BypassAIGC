@@ -1,0 +1,261 @@
+import os
+import shutil
+import tempfile
+from typing import Optional, List, Dict, Any
+from urllib.parse import quote
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Query, Depends, BackgroundTasks
+from fastapi.responses import FileResponse, JSONResponse
+from pydantic import BaseModel
+from sqlalchemy.orm import Session
+
+from app.database import get_db
+from app.models.models import User
+from app.config import settings
+from app.services.ai_service import AIService
+from app.services.word_opt_service import (
+    parse_docx_to_session,
+    get_session,
+    save_session,
+    list_sessions,
+    delete_session,
+    generate_3_suggestions,
+    apply_sentence_suggestion,
+    restore_sentence_original,
+    export_modified_docx,
+    process_word_session_full,
+)
+
+router = APIRouter(prefix="/word-opt", tags=["word-optimization"])
+
+
+class GenerateSuggestionRequest(BaseModel):
+    sentence_id: str
+    force: Optional[bool] = False
+
+
+class ApplySuggestionRequest(BaseModel):
+    sentence_id: str
+    selected_text: str
+    suggestion_id: Optional[int] = None
+
+
+class RestoreSentenceRequest(BaseModel):
+    sentence_id: str
+
+
+async def prefetch_suggestions_background(session_id: str):
+    """在后台为会话中的标红句子自动预生成 3 条修改建议"""
+    session = get_session(session_id)
+    if not session:
+        return
+
+    mode = session.get("processing_mode", "paper_polish_enhance")
+
+    ai_service = AIService(
+        model=settings.POLISH_MODEL,
+        api_key=settings.POLISH_API_KEY,
+        base_url=settings.POLISH_BASE_URL
+    )
+
+    updated = False
+    for p in session["paragraphs"]:
+        context = p["original_text"]
+        for s in p["sentences"]:
+            if s.get("needs_mod") and not s.get("suggestions"):
+                try:
+                    res = await generate_3_suggestions(s["original_text"], context, ai_service, mode=mode)
+                    s["reason"] = res.get("reason", "高危AI模板句式")
+                    s["suggestions"] = res.get("suggestions", [])
+                    updated = True
+                except Exception as e:
+                    print(f"[WARN] prefetch failed for {s['id']}: {e}")
+
+    if updated:
+        save_session(session)
+
+
+@router.post("/upload")
+async def upload_docx(
+    file: UploadFile = File(...),
+    processing_mode: Optional[str] = Form(None),
+    mode_q: Optional[str] = Query(None, alias="processing_mode"),
+    background_tasks: BackgroundTasks = None,
+    card_key: Optional[str] = Query(None)
+):
+    """上传 Word (.docx) 文件并初始化降重分析会话"""
+    if not file.filename.lower().endswith(".docx"):
+        raise HTTPException(status_code=400, detail="目前仅支持上传 .docx 格式的 Word 文档")
+
+    mode = processing_mode or mode_q or "paper_polish_enhance"
+    valid_modes = ['paper_polish', 'paper_enhance', 'paper_polish_enhance', 'emotion_polish']
+    if mode not in valid_modes:
+        mode = "paper_polish_enhance"
+
+    # 临时落盘
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".docx") as tmp:
+        shutil.copyfileobj(file.file, tmp)
+        tmp_path = tmp.name
+
+    try:
+        session_data = parse_docx_to_session(tmp_path, file.filename, processing_mode=mode)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Word 文档解析失败: {str(e)}")
+    finally:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+
+    # 启动后台全量检索与优化建议生成任务（txt优化同款异步处理机制）
+    if background_tasks:
+        background_tasks.add_task(process_word_session_full, session_data["session_id"])
+
+    return session_data
+
+
+@router.get("/session/{session_id}/progress")
+async def get_word_session_progress(session_id: str):
+    """获取 Word 会话的优化处理进度（与 txt 优化进度接口对齐）"""
+    session = get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="会话不存在")
+    return {
+        "session_id": session["session_id"],
+        "filename": session.get("filename"),
+        "processing_mode": session.get("processing_mode", "paper_polish_enhance"),
+        "status": session.get("status", "completed"),
+        "progress": session.get("progress", 100.0),
+        "current_stage": session.get("current_stage", "completed"),
+        "current_position": session.get("current_position", 0),
+        "total_to_process": session.get("total_to_process", session.get("need_mod_count", 0)),
+        "need_mod_count": session.get("need_mod_count", 0),
+        "modified_count": session.get("modified_count", 0),
+        "error_message": session.get("error_message")
+    }
+
+
+@router.get("/session/{session_id}")
+async def get_word_session(session_id: str):
+    """获取会话当前状态与文档数据"""
+    session = get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="会话不存在")
+    return session
+
+
+@router.post("/session/{session_id}/generate-suggestion")
+async def generate_suggestion_for_sentence(session_id: str, req: GenerateSuggestionRequest):
+    """按需为特定句子生成 3 条修改建议"""
+    session = get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="会话不存在")
+
+    mode = session.get("processing_mode", "paper_polish_enhance")
+
+    target_sentence = None
+    target_context = ""
+
+    for p in session["paragraphs"]:
+        for s in p["sentences"]:
+            if s["id"] == req.sentence_id:
+                target_sentence = s
+                target_context = p["original_text"]
+                break
+        if target_sentence:
+            break
+
+    if not target_sentence:
+        raise HTTPException(status_code=404, detail=f"未找到句子: {req.sentence_id}")
+
+    # 若未要求强制重生成且已缓存建议则直接返回
+    if not req.force and target_sentence.get("suggestions") and len(target_sentence["suggestions"]) >= 3:
+        return {
+            "sentence_id": req.sentence_id,
+            "reason": target_sentence.get("reason"),
+            "suggestions": target_sentence["suggestions"]
+        }
+
+    ai_service = AIService(
+        model=settings.POLISH_MODEL,
+        api_key=settings.POLISH_API_KEY,
+        base_url=settings.POLISH_BASE_URL
+    )
+
+    res = await generate_3_suggestions(target_sentence["original_text"], target_context, ai_service, mode=mode)
+    target_sentence["reason"] = res.get("reason", "高危AI模板句式")
+    target_sentence["suggestions"] = res.get("suggestions", [])
+
+    save_session(session)
+
+    return {
+        "sentence_id": req.sentence_id,
+        "reason": target_sentence["reason"],
+        "suggestions": target_sentence["suggestions"]
+    }
+
+
+@router.post("/session/{session_id}/apply")
+async def apply_suggestion(session_id: str, req: ApplySuggestionRequest):
+    """确认采纳某一建议"""
+    try:
+        updated = apply_sentence_suggestion(
+            session_id=session_id,
+            sentence_id=req.sentence_id,
+            new_text=req.selected_text,
+            suggestion_id=req.suggestion_id
+        )
+        return updated
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"应用修改失败: {str(e)}")
+
+
+@router.post("/session/{session_id}/restore")
+async def restore_sentence(session_id: str, req: RestoreSentenceRequest):
+    """还原句子为原始状态"""
+    try:
+        updated = restore_sentence_original(session_id, req.sentence_id)
+        return updated
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"还原失败: {str(e)}")
+
+
+@router.get("/session/{session_id}/export")
+async def export_word(session_id: str):
+    """导出替换修改后的 Word (.docx) 文件"""
+    try:
+        file_path = export_modified_docx(session_id)
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"生成 Word 导出失败: {str(e)}")
+
+    filename = os.path.basename(file_path)
+    # URL encode filename for Content-Disposition header
+    encoded_filename = quote(filename)
+
+    return FileResponse(
+        path=file_path,
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        filename=filename,
+        headers={
+            "Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}",
+            "Access-Control-Expose-Headers": "Content-Disposition"
+        }
+    )
+
+
+@router.get("/sessions")
+async def list_word_sessions(card_key: Optional[str] = Query(None)):
+    """获取 Word 降重历史会话列表"""
+    return list_sessions()
+
+
+@router.delete("/session/{session_id}")
+async def remove_word_session(session_id: str):
+    """删除指定 Word 会话"""
+    success = delete_session(session_id)
+    if not success:
+        raise HTTPException(status_code=404, detail="会话不存在")
+    return {"message": "会话已删除"}

@@ -3,9 +3,79 @@ import { useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import {
   FileText, History, LogOut, Play,
-  Users, Clock, AlertCircle, CheckCircle, Trash2, Info
+  Users, Clock, AlertCircle, CheckCircle, Trash2, Info,
+  Upload, FileUp, Loader2, Sparkles
 } from 'lucide-react';
-import { optimizationAPI } from '../api';
+import { optimizationAPI, wordOptAPI } from '../api';
+
+// Word 会话列表项组件
+const MODE_NAMES = {
+  paper_polish: '论文润色',
+  paper_enhance: '论文增强',
+  paper_polish_enhance: '润色 + 增强',
+  emotion_polish: '感情文章润色',
+};
+
+const WordSessionItem = memo(({ session, onView, onDelete }) => {
+  const handleDelete = useCallback((e) => {
+    e.stopPropagation();
+    onDelete(session);
+  }, [session, onDelete]);
+
+  const handleView = useCallback(() => {
+    onView(session.session_id);
+  }, [session.session_id, onView]);
+
+  return (
+    <div
+      onClick={handleView}
+      className="group p-3 rounded-xl hover:bg-gray-50 transition-all cursor-pointer border border-gray-100 hover:border-gray-200 relative bg-white shadow-xs"
+    >
+      <div className="flex items-start justify-between mb-1.5 gap-2">
+        <div className="flex items-center gap-1.5 min-w-0">
+          <FileText className="w-4 h-4 text-ios-blue flex-shrink-0" />
+          <span className="text-[13px] font-semibold text-black truncate" title={session.filename}>
+            {session.filename}
+          </span>
+        </div>
+        <span className="text-[11px] text-ios-gray/70 font-medium flex-shrink-0">
+          {new Date(session.created_at).toLocaleDateString()}
+        </span>
+      </div>
+
+      <div className="flex items-center justify-between mt-2 pt-1 text-[12px] text-gray-500">
+        <div className="flex items-center gap-1.5">
+          {session.status === 'processing' ? (
+            <span className="text-[11px] px-2 py-0.5 rounded-full bg-blue-50 text-ios-blue font-semibold flex items-center gap-1">
+              <span className="w-1.5 h-1.5 rounded-full bg-ios-blue animate-pulse" />
+              处理中 {(session.progress || 0).toFixed(0)}%
+            </span>
+          ) : (
+            <span className="text-[11px] px-1.5 py-0.5 rounded bg-blue-50 text-ios-blue font-medium">
+              {MODE_NAMES[session.processing_mode] || '润色 + 增强'}
+            </span>
+          )}
+          <span>
+            {session.status === 'processing' ? (
+              <span className="text-gray-400">正在检索生成...</span>
+            ) : (
+              <>已改: <strong className="text-emerald-600 font-bold">{session.modified_count || 0}</strong> / {session.need_mod_count || 0}</>
+            )}
+          </span>
+        </div>
+        <button
+          onClick={handleDelete}
+          className="p-1 text-gray-300 hover:text-ios-red hover:bg-red-50 rounded transition-colors"
+          title="删除会话"
+        >
+          <Trash2 className="w-3.5 h-3.5" />
+        </button>
+      </div>
+    </div>
+  );
+});
+
+WordSessionItem.displayName = 'WordSessionItem';
 
 // 会话列表项组件 - 使用 memo 避免不必要重渲染
 const SessionItem = memo(({ session, activeSession, onView, onDelete, onRetry }) => {
@@ -107,14 +177,75 @@ const SessionItem = memo(({ session, activeSession, onView, onDelete, onRetry })
 SessionItem.displayName = 'SessionItem';
 
 const WorkspacePage = () => {
+  const [taskTab, setTaskTab] = useState('text'); // 'text' | 'word'
   const [text, setText] = useState('');
   const [processingMode, setProcessingMode] = useState('paper_polish_enhance');
   const [sessions, setSessions] = useState([]);
+  const [wordSessions, setWordSessions] = useState([]);
   const [queueStatus, setQueueStatus] = useState(null);
   const [activeSession, setActiveSession] = useState(null);
+  const [activeWordSession, setActiveWordSession] = useState(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isLoadingSessions, setIsLoadingSessions] = useState(false);
+  const [isLoadingWordSessions, setIsLoadingWordSessions] = useState(false);
+  const [isUploadingWord, setIsUploadingWord] = useState(false);
   const navigate = useNavigate();
+
+  // 加载 Word 会话列表
+  const loadWordSessions = useCallback(async () => {
+    try {
+      setIsLoadingWordSessions(true);
+      const res = await wordOptAPI.listSessions();
+      const list = res.data || [];
+      setWordSessions(list);
+
+      const processing = list.find(s => s.status === 'processing');
+      if (processing) {
+        setActiveWordSession(processing.session_id);
+      }
+    } catch (err) {
+      console.error('加载 Word 会话列表失败:', err);
+    } finally {
+      setIsLoadingWordSessions(false);
+    }
+  }, []);
+
+  const handleUploadWordFile = async (file) => {
+    if (!file) return;
+    if (!file.name.toLowerCase().endsWith('.docx')) {
+      toast.error('请上传 .docx 格式的 Word 文档');
+      return;
+    }
+
+    try {
+      setIsUploadingWord(true);
+      toast.loading('正在上传并启动 Word 文档智能检索优化...', { id: 'word-upload' });
+      const res = await wordOptAPI.uploadDocx(file, processingMode);
+      setActiveWordSession(res.data.session_id);
+      toast.success('Word 降重优化任务已启动，正在后台检索与生成修改推荐...', { id: 'word-upload' });
+      loadWordSessions();
+    } catch (err) {
+      console.error('Word 上传解析失败:', err);
+      toast.error(err.response?.data?.detail || 'Word 文档解析失败', { id: 'word-upload' });
+    } finally {
+      setIsUploadingWord(false);
+    }
+  };
+
+  const handleDeleteWordSession = useCallback(async (session) => {
+    if (!window.confirm(`确定删除文档 "${session.filename}" 的降重记录吗？`)) return;
+    try {
+      await wordOptAPI.deleteSession(session.session_id);
+      toast.success('已删除记录');
+      loadWordSessions();
+    } catch (err) {
+      toast.error('删除失败');
+    }
+  }, [loadWordSessions]);
+
+  const handleViewWordSession = useCallback((sessionId) => {
+    navigate(`/word-session/${sessionId}`);
+  }, [navigate]);
 
   // 使用 useCallback 优化函数引用稳定性
   const loadSessions = useCallback(async () => {
@@ -179,11 +310,42 @@ const WorkspacePage = () => {
     }
   }, [loadSessions]);
 
+  const updateWordSessionProgress = useCallback(async (sessionId) => {
+    try {
+      const response = await wordOptAPI.getSessionProgress(sessionId);
+      const progress = response.data;
+
+      setWordSessions(prev => {
+        const target = prev.find(s => s.session_id === sessionId);
+        if (target && target.progress === progress.progress && target.status === progress.status) {
+          return prev;
+        }
+        return prev.map(s =>
+          s.session_id === sessionId ? { ...s, ...progress } : s
+        );
+      });
+
+      if (progress.status === 'completed' || progress.status === 'failed') {
+        setActiveWordSession(null);
+        loadWordSessions();
+
+        if (progress.status === 'completed') {
+          toast.success(`Word 文档 "${progress.filename}" 全量检索与优化已完成！`);
+        } else {
+          toast.error(`Word 优化失败: ${progress.error_message}`);
+        }
+      }
+    } catch (error) {
+      console.error('更新 Word 进度失败:', error);
+    }
+  }, [loadWordSessions]);
+
   // 初始加载 - 只在组件挂载时执行一次
   useEffect(() => {
     loadSessions();
+    loadWordSessions();
     loadQueueStatus();
-  }, [loadSessions, loadQueueStatus]);
+  }, [loadSessions, loadWordSessions, loadQueueStatus]);
 
   // 队列状态轮询 - 独立的 useEffect，避免与初始加载混淆
   useEffect(() => {
@@ -200,6 +362,16 @@ const WorkspacePage = () => {
       return () => clearInterval(interval);
     }
   }, [activeSession, updateSessionProgress]);
+
+  useEffect(() => {
+    // 活跃 Word 会话进度轮询
+    if (activeWordSession) {
+      const interval = setInterval(() => {
+        updateWordSessionProgress(activeWordSession);
+      }, 3000);
+      return () => clearInterval(interval);
+    }
+  }, [activeWordSession, updateWordSessionProgress]);
 
   const handleStartOptimization = useCallback(async () => {
     if (!text.trim()) {
@@ -283,6 +455,10 @@ const WorkspacePage = () => {
     return sessions.find(s => s.session_id === activeSession);
   }, [sessions, activeSession]);
 
+  const currentActiveWordSessionData = useMemo(() => {
+    return wordSessions.find(s => s.session_id === activeWordSession);
+  }, [wordSessions, activeWordSession]);
+
 
   return (
     <div className="min-h-screen bg-ios-background">
@@ -358,79 +534,199 @@ const WorkspacePage = () => {
                   新建任务
                 </h2>
               </div>
-              
-              {/* 处理模式选择 - iOS Segmented Control Style */}
-              <div className="mb-5">
-                <label className="block text-[13px] font-medium text-ios-gray mb-2 ml-1 uppercase tracking-wide">
-                  选择模式
-                </label>
-                <div className="space-y-3">
-                  {[
-                    { id: 'paper_polish', title: '论文润色', desc: '提升学术表达质量' },
-                    { id: 'paper_enhance', title: '论文增强', desc: '直接提升原创性' },
-                    { id: 'paper_polish_enhance', title: '润色 + 增强', desc: '两阶段完整处理' },
-                    { id: 'emotion_polish', title: '感情文章润色', desc: '自然、人性化表达' }
-                  ].map((mode) => (
-                    <label
-                      key={mode.id}
-                      className={`flex items-center p-3.5 rounded-xl cursor-pointer transition-all border ${
-                        processingMode === mode.id
-                          ? 'bg-blue-50 border-ios-blue ring-1 ring-ios-blue/20'
-                          : 'bg-white border-gray-200 hover:bg-gray-50'
-                      }`}
-                    >
-                      <input
-                        type="radio"
-                        name="processingMode"
-                        value={mode.id}
-                        checked={processingMode === mode.id}
-                        onChange={(e) => setProcessingMode(e.target.value)}
-                        className="mr-3 w-5 h-5 text-ios-blue focus:ring-ios-blue border-gray-300"
-                      />
-                      <div>
-                        <div className={`font-semibold text-[15px] ${processingMode === mode.id ? 'text-ios-blue' : 'text-black'}`}>
-                          {mode.title}
-                        </div>
-                        <div className="text-[13px] text-ios-gray mt-0.5">
-                          {mode.desc}
-                        </div>
-                      </div>
-                    </label>
-                  ))}
-                </div>
-              </div>
-              
-              <div className="relative">
-                <textarea
-                  value={text}
-                  onChange={(e) => setText(e.target.value)}
-                  placeholder="在此粘贴您的内容..."
-                  className="w-full h-64 px-4 py-3 bg-gray-50 rounded-xl focus:bg-white focus:ring-2 focus:ring-ios-blue/20 transition-all text-[16px] leading-relaxed text-black placeholder-gray-400 border-none outline-none resize-none"
-                />
-                <div className="absolute bottom-3 right-3 text-[12px] text-ios-gray bg-white/80 px-2 py-1 rounded-md backdrop-blur-sm">
-                  {text.length} 字
-                </div>
-              </div>
-              
-              <div className="mt-5 flex justify-end">
+
+              {/* 任务类型切换：文本粘贴 vs Word文档 */}
+              <div className="flex bg-gray-100 p-1 rounded-xl mb-5 max-w-sm">
                 <button
-                  onClick={handleStartOptimization}
-                  disabled={!text.trim() || activeSession || isSubmitting}
-                  className="flex items-center gap-2 bg-ios-blue hover:bg-blue-600 disabled:bg-gray-300 disabled:cursor-not-allowed text-white font-semibold py-3 px-8 rounded-xl transition-all active:scale-[0.98] shadow-sm text-[17px]"
+                  type="button"
+                  onClick={() => setTaskTab('text')}
+                  className={`flex-1 py-1.5 px-3 rounded-lg font-medium text-[13px] transition-all flex items-center justify-center gap-1.5 ${
+                    taskTab === 'text'
+                      ? 'bg-white text-black shadow-xs font-semibold'
+                      : 'text-gray-500 hover:text-black'
+                  }`}
                 >
-                  {isSubmitting ? (
-                    <>
-                      <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                      提交中...
-                    </>
-                  ) : (
-                    <>
-                      <Play className="w-5 h-5 fill-current" />
-                      开始优化
-                    </>
-                  )}
+                  <FileText className="w-3.5 h-3.5" />
+                  <span>文本粘贴润色</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setTaskTab('word')}
+                  className={`flex-1 py-1.5 px-3 rounded-lg font-medium text-[13px] transition-all flex items-center justify-center gap-1.5 ${
+                    taskTab === 'word'
+                      ? 'bg-white text-ios-blue shadow-xs font-semibold'
+                      : 'text-gray-500 hover:text-black'
+                  }`}
+                >
+                  <Upload className="w-3.5 h-3.5 text-ios-blue" />
+                  <span>Word 文档降重 (新)</span>
                 </button>
               </div>
+
+              {taskTab === 'word' ? (
+                <div className="space-y-5">
+                  {/* 处理模式选择 - 与 txt 文本模式一致 */}
+                  <div>
+                    <label className="block text-[13px] font-medium text-ios-gray mb-2 ml-1 uppercase tracking-wide">
+                      选择模式
+                    </label>
+                    <div className="space-y-3">
+                      {[
+                        { id: 'paper_polish', title: '论文润色', desc: '提升学术表达质量' },
+                        { id: 'paper_enhance', title: '论文增强', desc: '直接提升原创性' },
+                        { id: 'paper_polish_enhance', title: '润色 + 增强', desc: '两阶段完整处理' },
+                        { id: 'emotion_polish', title: '感情文章润色', desc: '自然、人性化表达' }
+                      ].map((mode) => (
+                        <label
+                          key={mode.id}
+                          className={`flex items-center p-3.5 rounded-xl cursor-pointer transition-all border ${
+                            processingMode === mode.id
+                              ? 'bg-blue-50 border-ios-blue ring-1 ring-ios-blue/20'
+                              : 'bg-white border-gray-200 hover:bg-gray-50'
+                          }`}
+                        >
+                          <input
+                            type="radio"
+                            name="processingModeWord"
+                            value={mode.id}
+                            checked={processingMode === mode.id}
+                            onChange={(e) => setProcessingMode(e.target.value)}
+                            className="mr-3 w-5 h-5 text-ios-blue focus:ring-ios-blue border-gray-300"
+                          />
+                          <div>
+                            <div className={`font-semibold text-[15px] ${processingMode === mode.id ? 'text-ios-blue' : 'text-black'}`}>
+                              {mode.title}
+                            </div>
+                            <div className="text-[13px] text-ios-gray mt-0.5">
+                              {mode.desc}
+                            </div>
+                          </div>
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div
+                    onDragOver={(e) => e.preventDefault()}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+                        handleUploadWordFile(e.dataTransfer.files[0]);
+                      }
+                    }}
+                    className="border-2 border-dashed border-gray-300 hover:border-ios-blue rounded-2xl p-8 text-center transition-all bg-gray-50/50 hover:bg-blue-50/20"
+                  >
+                    <input
+                      type="file"
+                      id="word-upload-input"
+                      accept=".docx"
+                      className="hidden"
+                      onChange={(e) => {
+                        if (e.target.files && e.target.files[0]) {
+                          handleUploadWordFile(e.target.files[0]);
+                        }
+                      }}
+                    />
+                    <div className="w-16 h-16 bg-blue-50 text-ios-blue rounded-2xl flex items-center justify-center mx-auto mb-4">
+                      {isUploadingWord ? (
+                        <Loader2 className="w-8 h-8 animate-spin" />
+                      ) : (
+                        <FileUp className="w-8 h-8" />
+                      )}
+                    </div>
+                    <h3 className="font-bold text-[17px] text-gray-800 mb-2">
+                      {isUploadingWord ? '正在解析 Word 文档中...' : '上传 Word 文档 (.docx)'}
+                    </h3>
+                    <p className="text-[13px] text-gray-500 max-w-md mx-auto leading-relaxed mb-6">
+                      完整还原论文排版格式，智能标红待修改的高危/模板语句。点击红句即可查看 3 条高质量学术改写建议并一键替换确认，最终可直接导出修改后的 Word 文档。
+                    </p>
+                    <button
+                      type="button"
+                      disabled={isUploadingWord}
+                      onClick={() => document.getElementById('word-upload-input')?.click()}
+                      className="inline-flex items-center gap-2 bg-ios-blue hover:bg-blue-600 disabled:bg-gray-300 text-white font-semibold py-2.5 px-7 rounded-xl shadow-xs transition-all text-[15px] active:scale-[0.98]"
+                    >
+                      <Upload className="w-4 h-4" />
+                      <span>{isUploadingWord ? '解析处理中...' : '选择本地 .docx 文档并开始'}</span>
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <>
+                  {/* 处理模式选择 - iOS Segmented Control Style */}
+                  <div className="mb-5">
+                    <label className="block text-[13px] font-medium text-ios-gray mb-2 ml-1 uppercase tracking-wide">
+                      选择模式
+                    </label>
+                    <div className="space-y-3">
+                      {[
+                        { id: 'paper_polish', title: '论文润色', desc: '提升学术表达质量' },
+                        { id: 'paper_enhance', title: '论文增强', desc: '直接提升原创性' },
+                        { id: 'paper_polish_enhance', title: '润色 + 增强', desc: '两阶段完整处理' },
+                        { id: 'emotion_polish', title: '感情文章润色', desc: '自然、人性化表达' }
+                      ].map((mode) => (
+                        <label
+                          key={mode.id}
+                          className={`flex items-center p-3.5 rounded-xl cursor-pointer transition-all border ${
+                            processingMode === mode.id
+                              ? 'bg-blue-50 border-ios-blue ring-1 ring-ios-blue/20'
+                              : 'bg-white border-gray-200 hover:bg-gray-50'
+                          }`}
+                        >
+                          <input
+                            type="radio"
+                            name="processingMode"
+                            value={mode.id}
+                            checked={processingMode === mode.id}
+                            onChange={(e) => setProcessingMode(e.target.value)}
+                            className="mr-3 w-5 h-5 text-ios-blue focus:ring-ios-blue border-gray-300"
+                          />
+                          <div>
+                            <div className={`font-semibold text-[15px] ${processingMode === mode.id ? 'text-ios-blue' : 'text-black'}`}>
+                              {mode.title}
+                            </div>
+                            <div className="text-[13px] text-ios-gray mt-0.5">
+                              {mode.desc}
+                            </div>
+                          </div>
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                  
+                  <div className="relative">
+                    <textarea
+                      value={text}
+                      onChange={(e) => setText(e.target.value)}
+                      placeholder="在此粘贴您的内容..."
+                      className="w-full h-64 px-4 py-3 bg-gray-50 rounded-xl focus:bg-white focus:ring-2 focus:ring-ios-blue/20 transition-all text-[16px] leading-relaxed text-black placeholder-gray-400 border-none outline-none resize-none"
+                    />
+                    <div className="absolute bottom-3 right-3 text-[12px] text-ios-gray bg-white/80 px-2 py-1 rounded-md backdrop-blur-sm">
+                      {text.length} 字
+                    </div>
+                  </div>
+                  
+                  <div className="mt-5 flex justify-end">
+                    <button
+                      onClick={handleStartOptimization}
+                      disabled={!text.trim() || activeSession || isSubmitting}
+                      className="flex items-center gap-2 bg-ios-blue hover:bg-blue-600 disabled:bg-gray-300 disabled:cursor-not-allowed text-white font-semibold py-3 px-8 rounded-xl transition-all active:scale-[0.98] shadow-sm text-[17px]"
+                    >
+                      {isSubmitting ? (
+                        <>
+                          <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                          提交中...
+                        </>
+                      ) : (
+                        <>
+                          <Play className="w-5 h-5 fill-current" />
+                          开始优化
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </>
+              )}
             </div>
 
             {/* 活跃会话进度 */}
@@ -493,45 +789,150 @@ const WorkspacePage = () => {
                 })()}
               </div>
             )}
+
+            {/* 活跃 Word 会话进度 - 按照 txt 优化流程 */}
+            {activeWordSession && currentActiveWordSessionData && (
+              <div className="bg-white rounded-2xl shadow-ios p-5 border border-blue-100">
+                <div className="flex items-center justify-between mb-4">
+                  <h2 className="text-[17px] font-bold text-black flex items-center gap-2">
+                    <div className="w-2 h-2 rounded-full bg-ios-blue animate-pulse" />
+                    Word 文档检索与优化处理中
+                  </h2>
+                  <span className="text-[13px] font-medium px-2 py-1 bg-blue-50 text-ios-blue rounded-md">
+                    {MODE_NAMES[currentActiveWordSessionData.processing_mode] || '润色 + 增强'}
+                  </span>
+                </div>
+
+                <div className="space-y-4">
+                  <div className="flex items-center gap-2 text-[14px] font-semibold text-gray-800">
+                    <FileText className="w-4 h-4 text-ios-blue flex-shrink-0" />
+                    <span className="truncate">{currentActiveWordSessionData.filename}</span>
+                  </div>
+
+                  <div>
+                    <div className="flex justify-between text-[13px] mb-2 font-medium">
+                      <span className="text-ios-gray">
+                        当前阶段: <span className="text-black">
+                          {currentActiveWordSessionData.current_stage === 'scanning'
+                            ? '正在扫描文档版式与AIGC高危句段...'
+                            : currentActiveWordSessionData.current_stage === 'generating'
+                            ? `正在为需要优化的句段生成 3 条改写推荐方案 (${(currentActiveWordSessionData.current_position || 0) + 1} / ${currentActiveWordSessionData.total_to_process || currentActiveWordSessionData.need_mod_count || 1} 处)`
+                            : '文档全量检索与建议生成已完成'}
+                        </span>
+                      </span>
+                      <span className="text-ios-blue font-bold">
+                        {(currentActiveWordSessionData.progress || 0).toFixed(1)}%
+                      </span>
+                    </div>
+                    <div className="w-full bg-gray-100 rounded-full h-2">
+                      <div
+                        className="bg-ios-blue h-2 rounded-full transition-all duration-500 ease-out shadow-[0_0_10px_rgba(0,122,255,0.3)]"
+                        style={{ width: `${currentActiveWordSessionData.progress || 10}%` }}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="flex justify-between items-center pt-1 text-[13px]">
+                    <span className="text-gray-500">
+                      待优化标注句段: <strong>{currentActiveWordSessionData.need_mod_count || 0}</strong> 处
+                    </span>
+                    <button
+                      onClick={() => navigate(`/word-session/${currentActiveWordSessionData.session_id}`)}
+                      className="inline-flex items-center gap-1.5 text-ios-blue hover:text-blue-700 font-semibold bg-blue-50 hover:bg-blue-100 px-3 py-1.5 rounded-lg transition-colors"
+                    >
+                      <span>进入查看文档</span>
+                      <ChevronRight className="w-4 h-4" />
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
 
           {/* 右侧 - 历史会话 */}
           <div className="space-y-6">
             <div className="bg-white rounded-2xl shadow-ios overflow-hidden flex flex-col h-[calc(100vh-140px)] sticky top-24">
-              <div className="p-5 border-b border-gray-100 bg-white/50 backdrop-blur-sm z-10 h-[72px] flex items-center">
+              <div className="p-4 border-b border-gray-100 bg-white/50 backdrop-blur-sm z-10 flex items-center justify-between">
                 <div className="flex items-center gap-2">
                   <History className="w-5 h-5 text-ios-gray" />
-                  <h2 className="text-[20px] font-bold text-black tracking-tight">
-                    历史记录
+                  <h2 className="text-[17px] font-bold text-black tracking-tight">
+                    {taskTab === 'word' ? 'Word 降重记录' : '文本润色记录'}
                   </h2>
+                </div>
+
+                <div className="flex bg-gray-100 p-0.5 rounded-lg text-[12px] font-medium">
+                  <button
+                    type="button"
+                    onClick={() => setTaskTab('text')}
+                    className={`px-2 py-0.5 rounded-md transition-all ${
+                      taskTab === 'text' ? 'bg-white text-black shadow-xs font-semibold' : 'text-gray-500'
+                    }`}
+                  >
+                    文本
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setTaskTab('word')}
+                    className={`px-2 py-0.5 rounded-md transition-all ${
+                      taskTab === 'word' ? 'bg-white text-ios-blue shadow-xs font-semibold' : 'text-gray-500'
+                    }`}
+                  >
+                    Word
+                  </button>
                 </div>
               </div>
               
               <div className="flex-1 overflow-y-auto p-3 space-y-3 custom-scrollbar h-full">
-                {isLoadingSessions ? (
-                  <div className="flex items-center justify-center py-12">
-                    <div className="w-6 h-6 border-2 border-ios-gray/30 border-t-ios-gray rounded-full animate-spin" />
-                  </div>
-                ) : sessions.length === 0 ? (
-                  <div className="text-center py-12 space-y-2">
-                    <div className="w-12 h-12 bg-gray-50 rounded-full flex items-center justify-center mx-auto text-gray-300">
-                      <History className="w-6 h-6" />
+                {taskTab === 'word' ? (
+                  isLoadingWordSessions ? (
+                    <div className="flex items-center justify-center py-12">
+                      <div className="w-6 h-6 border-2 border-ios-gray/30 border-t-ios-gray rounded-full animate-spin" />
                     </div>
-                    <p className="text-ios-gray text-sm">
-                      暂无会话记录
-                    </p>
-                  </div>
+                  ) : wordSessions.length === 0 ? (
+                    <div className="text-center py-12 space-y-2">
+                      <div className="w-12 h-12 bg-blue-50 rounded-full flex items-center justify-center mx-auto text-ios-blue">
+                        <FileText className="w-6 h-6" />
+                      </div>
+                      <p className="text-ios-gray text-sm">
+                        暂无 Word 降重文档
+                      </p>
+                    </div>
+                  ) : (
+                    wordSessions.map((session) => (
+                      <WordSessionItem
+                        key={session.session_id}
+                        session={session}
+                        onView={handleViewWordSession}
+                        onDelete={handleDeleteWordSession}
+                      />
+                    ))
+                  )
                 ) : (
-                  sessions.map((session) => (
-                    <SessionItem
-                      key={session.id}
-                      session={session}
-                      activeSession={activeSession}
-                      onView={handleViewSession}
-                      onDelete={handleDeleteSession}
-                      onRetry={handleRetrySegment}
-                    />
-                  ))
+                  isLoadingSessions ? (
+                    <div className="flex items-center justify-center py-12">
+                      <div className="w-6 h-6 border-2 border-ios-gray/30 border-t-ios-gray rounded-full animate-spin" />
+                    </div>
+                  ) : sessions.length === 0 ? (
+                    <div className="text-center py-12 space-y-2">
+                      <div className="w-12 h-12 bg-gray-50 rounded-full flex items-center justify-center mx-auto text-gray-300">
+                        <History className="w-6 h-6" />
+                      </div>
+                      <p className="text-ios-gray text-sm">
+                        暂无会话记录
+                      </p>
+                    </div>
+                  ) : (
+                    sessions.map((session) => (
+                      <SessionItem
+                        key={session.id}
+                        session={session}
+                        activeSession={activeSession}
+                        onView={handleViewSession}
+                        onDelete={handleDeleteSession}
+                        onRetry={handleRetrySegment}
+                      />
+                    ))
+                  )
                 )}
               </div>
             </div>

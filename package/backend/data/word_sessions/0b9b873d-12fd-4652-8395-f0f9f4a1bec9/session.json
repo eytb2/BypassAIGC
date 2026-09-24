@@ -1,0 +1,169 @@
+{
+  "session_id": "0b9b873d-12fd-4652-8395-f0f9f4a1bec9",
+  "filename": "test_paper.docx",
+  "processing_mode": "paper_polish_enhance",
+  "status": "processing",
+  "progress": 10.0,
+  "current_stage": "scanning",
+  "current_position": 0,
+  "total_to_process": 4,
+  "error_message": null,
+  "created_at": "2026-09-24T14:25:25.287480",
+  "completed_at": null,
+  "total_paragraphs": 5,
+  "total_sentences": 9,
+  "need_mod_count": 4,
+  "modified_count": 0,
+  "paragraphs": [
+    {
+      "id": "p0",
+      "index": 0,
+      "style": "Title",
+      "align": "left",
+      "is_title": true,
+      "is_subtitle": false,
+      "is_heading": false,
+      "original_text": "基于深度学习的图像识别算法研究",
+      "sentences": [
+        {
+          "id": "p0_s0",
+          "original_text": "基于深度学习的图像识别算法研究",
+          "current_text": "基于深度学习的图像识别算法研究",
+          "needs_mod": false,
+          "reason": null,
+          "suggestions": [],
+          "is_applied": false,
+          "selected_suggestion_id": null
+        }
+      ]
+    },
+    {
+      "id": "p1",
+      "index": 1,
+      "style": "Heading 1",
+      "align": "left",
+      "is_title": false,
+      "is_subtitle": false,
+      "is_heading": true,
+      "original_text": "第1章 绪论",
+      "sentences": [
+        {
+          "id": "p1_s0",
+          "original_text": "第1章 绪论",
+          "current_text": "第1章 绪论",
+          "needs_mod": false,
+          "reason": null,
+          "suggestions": [],
+          "is_applied": false,
+          "selected_suggestion_id": null
+        }
+      ]
+    },
+    {
+      "id": "p2",
+      "index": 2,
+      "style": "Normal",
+      "align": "left",
+      "is_title": false,
+      "is_subtitle": false,
+      "is_heading": false,
+      "original_text": "随着人工智能技术的快速发展，计算机视觉在众多领域发挥着越来越重要的作用。本研究通过构建深度卷积神经网络，旨在解决复杂背景下的目标识别准确率低的问题。",
+      "sentences": [
+        {
+          "id": "p2_s0",
+          "original_text": "随着人工智能技术的快速发展，计算机视觉在众多领域发挥着越来越重要的作用。",
+          "current_text": "随着人工智能技术的快速发展，计算机视觉在众多领域发挥着越来越重要的作用。",
+          "needs_mod": true,
+          "reason": "套话句式（发挥着...作用）",
+          "suggestions": [],
+          "is_applied": false,
+          "selected_suggestion_id": null
+        },
+        {
+          "id": "p2_s1",
+          "original_text": "本研究通过构建深度卷积神经网络，旨在解决复杂背景下的目标识别准确率低的问题。",
+          "current_text": "本研究通过构建深度卷积神经网络，旨在解决复杂背景下的目标识别准确率低的问题。",
+          "needs_mod": false,
+          "reason": null,
+          "suggestions": [],
+          "is_applied": false,
+          "selected_suggestion_id": null
+        }
+      ]
+    },
+    {
+      "id": "p3",
+      "index": 3,
+      "style": "Normal",
+      "align": "left",
+      "is_title": false,
+      "is_subtitle": false,
+      "is_heading": false,
+      "original_text": "在传统的特征提取方法中，手工设计的特征算子在很大程度上依赖于专家的先验知识，难以适应多变的实际应用场景。由此可见，探索端到端的自动特征学习范式具有深远的研究价值。",
+      "sentences": [
+        {
+          "id": "p3_s0",
+          "original_text": "在传统的特征提取方法中，手工设计的特征算子在很大程度上依赖于专家的先验知识，难以适应多变的实际应用场景。",
+          "current_text": "在传统的特征提取方法中，手工设计的特征算子在很大程度上依赖于专家的先验知识，难以适应多变的实际应用场景。",
+          "needs_mod": true,
+          "reason": "模糊限定套话",
+          "suggestions": [],
+          "is_applied": false,
+          "selected_suggestion_id": null
+        },
+        {
+          "id": "p3_s1",
+          "original_text": "由此可见，探索端到端的自动特征学习范式具有深远的研究价值。",
+          "current_text": "由此可见，探索端到端的自动特征学习范式具有深远的研究价值。",
+          "needs_mod": true,
+          "reason": "机械结论过渡词",
+          "suggestions": [],
+          "is_applied": false,
+          "selected_suggestion_id": null
+        }
+      ]
+    },
+    {
+      "id": "p4",
+      "index": 4,
+      "style": "Normal",
+      "align": "left",
+      "is_title": false,
+      "is_subtitle": false,
+      "is_heading": false,
+      "original_text": "本论文的主要组织架构如下：第一部分阐述研究背景与国内外现状；第二部分系统介绍网络模型设计；第三部分给出实验评估与对比分析。",
+      "sentences": [
+        {
+          "id": "p4_s0",
+          "original_text": "本论文的主要组织架构如下：第一部分阐述研究背景与国内外现状；",
+          "current_text": "本论文的主要组织架构如下：第一部分阐述研究背景与国内外现状；",
+          "needs_mod": true,
+          "reason": "建议进行学术润色与原创性增强两阶段重构",
+          "suggestions": [],
+          "is_applied": false,
+          "selected_suggestion_id": null
+        },
+        {
+          "id": "p4_s1",
+          "original_text": "第二部分系统介绍网络模型设计；",
+          "current_text": "第二部分系统介绍网络模型设计；",
+          "needs_mod": false,
+          "reason": null,
+          "suggestions": [],
+          "is_applied": false,
+          "selected_suggestion_id": null
+        },
+        {
+          "id": "p4_s2",
+          "original_text": "第三部分给出实验评估与对比分析。",
+          "current_text": "第三部分给出实验评估与对比分析。",
+          "needs_mod": false,
+          "reason": null,
+          "suggestions": [],
+          "is_applied": false,
+          "selected_suggestion_id": null
+        }
+      ]
+    }
+  ]
+}

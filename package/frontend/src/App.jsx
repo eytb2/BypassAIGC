@@ -6,6 +6,7 @@ import WorkspacePage from './pages/WorkspacePage';
 import SessionDetailPage from './pages/SessionDetailPage';
 import AdminDashboard from './pages/AdminDashboard';
 import WordFormatterPage from './pages/WordFormatterPage';
+import WordSessionDetailPage from './pages/WordSessionDetailPage';
 import SpecGeneratorPage from './pages/SpecGeneratorPage';
 import ArticlePreprocessorPage from './pages/ArticlePreprocessorPage';
 import FormatCheckerPage from './pages/FormatCheckerPage';
@@ -68,6 +69,15 @@ function App() {
           element={
             <ProtectedRoute>
               <SessionDetailPage />
+            </ProtectedRoute>
+          }
+        />
+
+        <Route
+          path="/word-session/:sessionId"
+          element={
+            <ProtectedRoute>
+              <WordSessionDetailPage />
             </ProtectedRoute>
           }
         />

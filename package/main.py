@@ -54,7 +54,7 @@ import uvicorn
 # 导入后端应用组件
 from app.config import settings
 from app.database import init_db
-from app.routes import admin, prompts, optimization
+from app.routes import admin, prompts, optimization, word_opt
 from app.word_formatter import router as word_formatter_router
 from app.word_formatter.services import get_job_manager
 from app.database import SessionLocal
@@ -116,6 +116,7 @@ app.include_router(admin.router, prefix="/api")
 app.include_router(prompts.router, prefix="/api")
 app.include_router(optimization.router, prefix="/api")
 app.include_router(word_formatter_router, prefix="/api")
+app.include_router(word_opt.router, prefix="/api")
 
 
 @app.on_event("startup")
@@ -340,6 +341,14 @@ if os.path.exists(STATIC_DIR):
         if os.path.exists(index_file):
             return FileResponse(index_file)
         return {"error": "Session page not found"}
+
+    @app.get("/word-session/{session_id}")
+    async def serve_word_session(session_id: str):
+        """服务 Word 会话详情页面"""
+        index_file = os.path.join(STATIC_DIR, 'index.html')
+        if os.path.exists(index_file):
+            return FileResponse(index_file)
+        return {"error": "Word session page not found"}
     
     @app.get("/access/{card_key}")
     async def serve_access(card_key: str):
