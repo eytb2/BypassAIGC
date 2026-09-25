@@ -4,7 +4,7 @@ import tempfile
 from typing import Optional, List, Dict, Any
 from urllib.parse import quote
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Query, Depends, BackgroundTasks
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -23,6 +23,7 @@ from app.services.word_opt_service import (
     restore_sentence_original,
     export_modified_docx,
     process_word_session_full,
+    batch_apply_all_suggestions,
 )
 
 router = APIRouter(prefix="/word-opt", tags=["word-optimization"])
@@ -199,7 +200,7 @@ async def apply_suggestion(session_id: str, req: ApplySuggestionRequest):
         updated = apply_sentence_suggestion(
             session_id=session_id,
             sentence_id=req.sentence_id,
-            new_text=req.selected_text,
+            selected_text=req.selected_text,
             suggestion_id=req.suggestion_id
         )
         return updated
@@ -221,24 +222,51 @@ async def restore_sentence(session_id: str, req: RestoreSentenceRequest):
         raise HTTPException(status_code=500, detail=f"还原失败: {str(e)}")
 
 
+@router.get("/session/{session_id}/docx")
+async def get_word_docx_file(session_id: str):
+    """获取当前 Word 会话的 docx 二进制文件（供 docx-preview 标准在线预览渲染）"""
+    session = get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="会话不存在")
+    try:
+        stream = export_modified_docx(session_id)
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"读取 Word 文档失败: {str(e)}")
+
+    filename = session.get("filename", "document.docx")
+    encoded_filename = quote(filename)
+
+    return Response(
+        content=stream.getvalue(),
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={
+            "Content-Disposition": f"inline; filename*=UTF-8''{encoded_filename}",
+            "Access-Control-Expose-Headers": "Content-Disposition"
+        }
+    )
+
+
 @router.get("/session/{session_id}/export")
 async def export_word(session_id: str):
     """导出替换修改后的 Word (.docx) 文件"""
+    session = get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="会话不存在")
     try:
-        file_path = export_modified_docx(session_id)
+        stream = export_modified_docx(session_id)
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"生成 Word 导出失败: {str(e)}")
 
-    filename = os.path.basename(file_path)
-    # URL encode filename for Content-Disposition header
-    encoded_filename = quote(filename)
+    filename = session.get("filename", "document.docx")
+    encoded_filename = quote(f"[已降重]_{filename}")
 
-    return FileResponse(
-        path=file_path,
+    return Response(
+        content=stream.getvalue(),
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        filename=filename,
         headers={
             "Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}",
             "Access-Control-Expose-Headers": "Content-Disposition"
@@ -259,3 +287,19 @@ async def remove_word_session(session_id: str):
     if not success:
         raise HTTPException(status_code=404, detail="会话不存在")
     return {"message": "会话已删除"}
+
+
+@router.post("/session/{session_id}/apply-all")
+async def batch_apply_all(session_id: str):
+    """一键采纳所有具备生成方案的待修改语句（默认采用第一条推荐方案）"""
+    session = get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="会话不存在")
+    if session.get("status") == "processing":
+        raise HTTPException(status_code=400, detail="后台正在全量检索与生成建议，请待完成后再一键采纳")
+
+    result = batch_apply_all_suggestions(session_id)
+    if "error" in result:
+        raise HTTPException(status_code=404, detail=result["error"])
+    return result
+

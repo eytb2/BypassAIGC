@@ -293,6 +293,8 @@ export const wordOptAPI = {
   restoreSentence: (sessionId, sentenceId) =>
     api.post(`/word-opt/session/${sessionId}/restore`, { sentence_id: sentenceId }),
   exportDocxUrl: (sessionId) => `/api/word-opt/session/${sessionId}/export`,
+  getDocxBlob: (sessionId) => api.get(`/word-opt/session/${sessionId}/docx`, { responseType: 'arraybuffer' }),
+  batchApplyAll: (sessionId) => api.post(`/word-opt/session/${sessionId}/apply-all`),
   listSessions: () => api.get('/word-opt/sessions'),
   deleteSession: (sessionId) => api.delete(`/word-opt/session/${sessionId}`),
 };

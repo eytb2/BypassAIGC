@@ -3,6 +3,8 @@ import io
 import re
 import json
 import uuid
+import time
+import logging
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 import docx
@@ -388,22 +390,41 @@ def parse_docx_to_session(file_path: str, filename: str, processing_mode: str = 
 
 
 def save_session(session_data: Dict[str, Any]):
-    """持久化会话数据到 json 文件"""
+    """持久化会话数据到 json 文件（使用原子写入，杜绝并发读取冲突或界面卡顿）"""
     session_id = session_data["session_id"]
     session_dir = os.path.join(DATA_DIR, session_id)
     os.makedirs(session_dir, exist_ok=True)
     json_path = os.path.join(session_dir, "session.json")
-    with open(json_path, "w", encoding="utf-8") as f:
-        json.dump(session_data, f, ensure_ascii=False, indent=2)
+    tmp_path = os.path.join(session_dir, f"session_{uuid.uuid4().hex[:8]}.tmp")
+    try:
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            json.dump(session_data, f, ensure_ascii=False, indent=2)
+        os.replace(tmp_path, json_path)
+    except Exception as e:
+        if os.path.exists(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except Exception:
+                pass
+        raise e
 
 
 def get_session(session_id: str) -> Optional[Dict[str, Any]]:
-    """获取指定会话数据"""
+    """获取指定会话数据（具备重试与防并发半读取机制）"""
     json_path = os.path.join(DATA_DIR, session_id, "session.json")
     if not os.path.exists(json_path):
         return None
-    with open(json_path, "r", encoding="utf-8") as f:
-        return json.load(f)
+    last_err = None
+    for _ in range(3):
+        try:
+            with open(json_path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception as e:
+            last_err = e
+            time.sleep(0.04)
+    if last_err:
+        logging.error(f"Failed to read session.json for {session_id} after 3 attempts: {last_err}")
+    return None
 
 
 def list_sessions() -> List[Dict[str, Any]]:
@@ -681,10 +702,14 @@ async def generate_3_suggestions(
 def apply_sentence_suggestion(
     session_id: str,
     sentence_id: str,
-    selected_text: str,
-    suggestion_id: Optional[int] = None
+    selected_text: Optional[str] = None,
+    suggestion_id: Optional[int] = None,
+    new_text: Optional[str] = None
 ) -> Optional[Dict[str, Any]]:
     """采纳用户选择的建议或自定义改写，更新句子状态并保存会话"""
+    chosen_text = selected_text if selected_text is not None else new_text
+    if chosen_text is None:
+        raise ValueError("selected_text 或 new_text 必须至少提供一个")
     session = get_session(session_id)
     if not session:
         return None
@@ -704,7 +729,7 @@ def apply_sentence_suggestion(
     if not target_sentence:
         return None
 
-    target_sentence["current_text"] = selected_text
+    target_sentence["current_text"] = chosen_text
     target_sentence["is_applied"] = True
     target_sentence["selected_suggestion_id"] = suggestion_id
 
@@ -782,3 +807,37 @@ def export_modified_docx(session_id: str) -> io.BytesIO:
     doc.save(output_stream)
     output_stream.seek(0)
     return output_stream
+
+
+def batch_apply_all_suggestions(session_id: str) -> Dict[str, Any]:
+    """一键采纳所有具备建议方案的待优化语句（默认采用第 1 条推荐方案）"""
+    session = get_session(session_id)
+    if not session:
+        return {"error": "会话不存在"}
+
+    applied_count = 0
+    skipped_count = 0
+    modified_count = session.get("modified_count", 0)
+
+    for p in session.get("paragraphs", []):
+        for s in p.get("sentences", []):
+            if s.get("needs_mod") and not s.get("is_applied"):
+                suggestions = s.get("suggestions", [])
+                if suggestions and len(suggestions) > 0:
+                    chosen = suggestions[0]
+                    s["current_text"] = chosen["text"]
+                    s["is_applied"] = True
+                    s["selected_suggestion_id"] = chosen.get("id", 1)
+                    modified_count += 1
+                    applied_count += 1
+                else:
+                    skipped_count += 1
+
+    session["modified_count"] = modified_count
+    save_session(session)
+    return {
+        "session": session,
+        "applied_count": applied_count,
+        "skipped_count": skipped_count
+    }
+
