@@ -1,4 +1,4 @@
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Any
 import json
 import re
 from openai import AsyncOpenAI, PermissionDeniedError, AuthenticationError, RateLimitError
@@ -103,49 +103,161 @@ def remove_thinking_tags(text: str) -> str:
     return text.strip()
 
 
+# 系统默认模型后备降级链：优先 gemini-3.8-max -> fallback qwen3.8 -> fallback glm5.3
+DEFAULT_FALLBACK_CHAIN = [
+    {
+        "name": "gemini-3.8-max",
+        "model": "gemini-3.8-flash-high",
+        "base_url": "http://172.17.0.1:8317/v1",
+        "api_key": "sk-d76813e3135e23929497e7486f0bae98",
+    },
+    {
+        "name": "qwen3.8",
+        "model": "Qwen3.8-Max-finest",
+        "base_url": "http://172.17.0.1:8317/v1",
+        "api_key": "sk-d76813e3135e23929497e7486f0bae98",
+    },
+    {
+        "name": "glm5.3",
+        "model": "glm-5.3",
+        "base_url": "http://172.17.0.1:8088/v1",
+        "api_key": "sk-d538b8f005c1b2d503e0b7442ddc709135fd28076765c968a900871600563d0b",
+    },
+]
+
+MODEL_ALIASES = {
+    # Gemini 3.8 别名映射
+    "gemini-3.8-max": "gemini-3.8-flash-high",
+    "gemini-3.8": "gemini-3.8-flash-high",
+    "gemini3.8": "gemini-3.8-flash-high",
+    "gemini3.8-max": "gemini-3.8-flash-high",
+    "gemini-flash": "gemini-3.8-flash-high",
+    "gemini-3.8-flash": "gemini-3.8-flash-high",
+    # Qwen 3.8 别名映射
+    "qwen3.8": "Qwen3.8-Max-finest",
+    "qwen-3.8": "Qwen3.8-Max-finest",
+    "qwen3.8-max": "Qwen3.8-Max-finest",
+    "qwen-3.8-max": "Qwen3.8-Max-finest",
+    "qwen": "Qwen3.8-Max-finest",
+    # GLM 5.3 别名映射
+    "glm5.3": "glm-5.3",
+    "glm-5.3": "glm-5.3",
+    "glm": "glm-5.3",
+}
+
+
+def resolve_model_name(name: str) -> str:
+    """根据别名映射表解析实际的大模型 ID"""
+    if not name:
+        return name
+    return MODEL_ALIASES.get(name.lower(), name)
+
+
+def get_model_fallback_chain() -> List[Dict[str, Any]]:
+    """获取模型降级候选链配置"""
+    custom_str = getattr(settings, "MODEL_FALLBACK_CHAIN", None)
+    if custom_str:
+        try:
+            custom = json.loads(custom_str)
+            if isinstance(custom, list) and len(custom) > 0:
+                return custom
+        except Exception as e:
+            print(f"[WARN] 解析 settings.MODEL_FALLBACK_CHAIN 失败: {e}，将使用系统默认降级链")
+    return DEFAULT_FALLBACK_CHAIN
+
+
 class AIService:
-    """AI 服务类"""
+    """AI 服务类，支持多模型按优先级重试/故障转移 (Fallback)"""
     
     def __init__(
         self,
-        model: str,
+        model: Optional[str] = None,
         api_key: Optional[str] = None,
-        base_url: Optional[str] = None
+        base_url: Optional[str] = None,
+        fallback_chain: Optional[List[Dict[str, Any]]] = None
     ):
-        self.model = model
-        self.api_key = api_key or settings.OPENAI_API_KEY
+        raw_model = model or getattr(settings, "POLISH_MODEL", "gemini-3.8-max")
+        resolved_model = resolve_model_name(raw_model)
         
-        # 修复 base_url 处理：只移除末尾的单个斜杠，保留路径部分
-        # 例如: "http://api.com/v1/" -> "http://api.com/v1"
-        raw_base_url = base_url or settings.OPENAI_BASE_URL
-        self.base_url = raw_base_url.rstrip("/") if raw_base_url else None
+        curr_base_url = base_url.rstrip("/") if base_url else None
+        curr_api_key = api_key
+
+        chain_pool = fallback_chain or get_model_fallback_chain()
+
+        # 如果调用方未显式传入 base_url / api_key，优先从匹配的降级链候选者中获取专有配置
+        if not curr_base_url or not curr_api_key:
+            for item in chain_pool:
+                item_model = resolve_model_name(item.get("model", ""))
+                item_name = item.get("name", "")
+                if item_model.lower() == resolved_model.lower() or item_name.lower() == raw_model.lower():
+                    if not curr_base_url and item.get("base_url"):
+                        curr_base_url = item.get("base_url", "").rstrip("/")
+                    if not curr_api_key and item.get("api_key"):
+                        curr_api_key = item.get("api_key")
+                    break
+
+        # 仍未获取到则回退至全局配置
+        if not curr_base_url:
+            raw_base_url = getattr(settings, "POLISH_BASE_URL", None) or settings.OPENAI_BASE_URL
+            curr_base_url = raw_base_url.rstrip("/") if raw_base_url else None
+        if not curr_api_key:
+            curr_api_key = getattr(settings, "POLISH_API_KEY", None) or settings.OPENAI_API_KEY
         
-        # 验证必需的配置
-        if not self.api_key:
-            raise Exception("API Key 未配置，无法初始化 AI 服务")
-        if not self.base_url:
-            raise Exception("Base URL 未配置，无法初始化 AI 服务")
-        
-        try:
-            # 初始化 OpenAI 客户端
-            self.client = AsyncOpenAI(
-                api_key=self.api_key,
-                base_url=self.base_url,
+        primary_candidate = {
+            "raw_name": raw_model,
+            "model": resolved_model,
+            "base_url": curr_base_url,
+            "api_key": curr_api_key
+        }
+
+        # 组装完整降级候选列表
+        self.candidates: List[Dict[str, Any]] = [primary_candidate]
+        for item in chain_pool:
+            c_raw = item.get("name") or item.get("model")
+            c_resolved = resolve_model_name(item.get("model", ""))
+            c_base_url = item.get("base_url", "").rstrip("/")
+            c_api_key = item.get("api_key")
+
+            # 避免重复加入主模型或已存在的模型 (相同 model 且相同 base_url)
+            if any(c["model"].lower() == c_resolved.lower() and c["base_url"] == c_base_url for c in self.candidates):
+                continue
+
+            self.candidates.append({
+                "raw_name": c_raw,
+                "model": c_resolved,
+                "base_url": c_base_url,
+                "api_key": c_api_key
+            })
+
+        # 保证向后兼容的成员属性
+        self.model = primary_candidate["model"]
+        self.base_url = primary_candidate["base_url"]
+        self.api_key = primary_candidate["api_key"]
+        self._enable_logging = True
+        self._clients: Dict[tuple, AsyncOpenAI] = {}
+
+        # 预热主客户端
+        self.client = self._get_client(self.base_url, self.api_key)
+
+        chain_str = " -> ".join([f"{c['raw_name']}({c['model']})" for c in self.candidates])
+        print(f"[INFO] AI Service 初始化成功: 主模型={self.model}, 降级链=[{chain_str}]")
+
+    def _get_client(self, base_url: str, api_key: str) -> AsyncOpenAI:
+        """获取或创建指定 base_url & api_key 的 OpenAI 客户端"""
+        cleaned_url = base_url.rstrip("/") if base_url else ""
+        cache_key = (cleaned_url, api_key)
+        if cache_key not in self._clients:
+            self._clients[cache_key] = AsyncOpenAI(
+                api_key=api_key or "sk-dummy",
+                base_url=cleaned_url or "http://127.0.0.1:8000/v1",
                 timeout=60.0,
-                max_retries=2,
+                max_retries=1,
                 default_headers={
                     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
                 }
             )
-            
-            # 启用所有API请求的日志记录
-            self._enable_logging = True
-            print(f"[INFO] AI Service 初始化成功: model={model}, base_url={self.base_url}")
-        except Exception as e:
-            error_msg = f"AI Service 初始化失败: {str(e)}"
-            print(f"[ERROR] {error_msg}")
-            raise Exception(error_msg)
-    
+        return self._clients[cache_key]
+
     async def stream_complete(
         self,
         messages: List[Dict[str, str]],
@@ -153,7 +265,7 @@ class AIService:
         max_tokens: Optional[int] = None,
         reasoning_effort: Optional[str] = None
     ):
-        """调用AI完成（流式）
+        """调用AI完成（流式），支持连接失败时自动降级到备选模型
 
         Args:
             messages: 消息列表
@@ -161,136 +273,123 @@ class AIService:
             max_tokens: 最大 token 数
             reasoning_effort: 推理强度（none/low/medium/high/xhigh），与 temperature 互斥
         """
-        try:
-            # 构建 API 调用参数
+        last_exception = None
+        stream = None
+        chosen_candidate = None
+
+        for idx, candidate in enumerate(self.candidates):
+            model_name = candidate["model"]
+            raw_name = candidate.get("raw_name", model_name)
+            base_url = candidate["base_url"]
+            api_key = candidate["api_key"]
+
+            if not base_url or not api_key:
+                continue
+
+            client = self._get_client(base_url, api_key)
+
             api_params = {
-                "model": self.model,
+                "model": model_name,
                 "messages": messages,
                 "stream": True
             }
-
             if max_tokens:
                 api_params["max_tokens"] = max_tokens
 
-            # 核心互斥逻辑：reasoning_effort 与 temperature 互斥
             use_reasoning = reasoning_effort and reasoning_effort != "none"
             if use_reasoning:
-                # 使用 extra_body 传递 reasoning_effort 以兼容旧版 SDK 和第三方 API
                 api_params["extra_body"] = {"reasoning_effort": reasoning_effort}
             else:
                 api_params["temperature"] = temperature
 
             if self._enable_logging:
                 print("\n" + "="*80, flush=True)
-                print("[STREAM REQUEST] Base URL:", self.base_url, flush=True)
-                print("[STREAM REQUEST] Model:", self.model, flush=True)
+                print(f"[STREAM REQUEST] (尝试 #{idx+1}/{len(self.candidates)}: {raw_name} -> {model_name})", flush=True)
+                print("[STREAM REQUEST] Base URL:", base_url, flush=True)
+                print("[STREAM REQUEST] Model:", model_name, flush=True)
                 if use_reasoning:
                     print("[STREAM REQUEST] Reasoning Effort:", reasoning_effort, flush=True)
                 else:
                     print("[STREAM REQUEST] Temperature:", temperature, flush=True)
-                print("[STREAM REQUEST] Messages:", flush=True)
-                for idx, msg in enumerate(messages):
-                    role = msg.get('role', 'unknown')
-                    content = msg.get('content', '')
-                    content_preview = content[:200] + '...' if len(content) > 200 else content
-                    print(f"  [{idx}] {role}: {content_preview}", flush=True)
                 print("="*80 + "\n", flush=True)
 
-            # 尝试调用 API，如果失败则根据错误类型决定是否降级重试
             try:
-                stream = await self.client.chat.completions.create(**api_params)
-            except Exception as api_error:
-                error_category = get_error_category(api_error)
-                can_retry = is_retryable_error(api_error)
+                try:
+                    stream = await client.chat.completions.create(**api_params)
+                except Exception as api_error:
+                    can_retry_reasoning = use_reasoning and is_retryable_error(api_error)
+                    if can_retry_reasoning:
+                        if self._enable_logging:
+                            print(f"[STREAM REQUEST] {model_name} 失败，尝试降级参数（移除 reasoning_effort）...", flush=True)
+                        api_params.pop("extra_body", None)
+                        api_params["temperature"] = temperature
+                        stream = await client.chat.completions.create(**api_params)
+                    else:
+                        raise api_error
 
-                if self._enable_logging:
-                    print(f"[STREAM REQUEST] API 调用失败", flush=True)
-                    print(f"[STREAM REQUEST] 错误类型: {error_category}", flush=True)
-                    print(f"[STREAM REQUEST] 错误详情: {str(api_error)}", flush=True)
-                    print(f"[STREAM REQUEST] 可否降级重试: {can_retry}", flush=True)
-
-                # 只有在使用了 reasoning_effort 且错误可重试时才降级
-                if use_reasoning and can_retry:
-                    if self._enable_logging:
-                        print(f"[STREAM REQUEST] 尝试降级重试（移除 reasoning_effort）...", flush=True)
-                    # 移除 extra_body（包含 reasoning_effort），添加 temperature
-                    api_params.pop("extra_body", None)
-                    api_params["temperature"] = temperature
-                    stream = await self.client.chat.completions.create(**api_params)
+                chosen_candidate = candidate
+                break
+            except Exception as e:
+                last_exception = e
+                error_cat = get_error_category(e)
+                print(f"[STREAM WARN] 流式模型 {model_name} ({raw_name}) 连接失败: [{error_cat}] {str(e)}", flush=True)
+                if idx < len(self.candidates) - 1:
+                    next_cand = self.candidates[idx + 1]
+                    print(f"[STREAM FALLBACK] 自动触发降级，切换到备用模型: {next_cand.get('raw_name', next_cand['model'])}...", flush=True)
+                    continue
                 else:
-                    # 不可重试的错误，直接抛出带有更详细信息的异常
-                    if isinstance(api_error, PermissionDeniedError):
-                        raise Exception(
-                            f"AI 请求被拒绝: {str(api_error)}。"
-                            f"这可能是因为: 1) 内容触发了 AI 服务商的安全过滤; "
-                            f"2) API Key 权限不足; 3) 代理服务配置问题。"
-                            f"建议检查输入内容或联系 API 服务商。"
-                        )
-                    raise
+                    raise Exception(f"AI流式调用所有备选模型均失败: {str(last_exception)}")
 
-            full_response = ""  # 收集完整响应
-            in_thinking_tag = False  # 跟踪是否在思考标签内
-            thinking_buffer = ""  # 暂存可能的思考内容
-            
+        # 已经成功获取 stream，开始逐步输出
+        try:
+            full_response = ""
+            in_thinking_tag = False
+            thinking_buffer = ""
+
             async for chunk in stream:
                 if chunk.choices and chunk.choices[0].delta.content:
                     content = chunk.choices[0].delta.content
                     full_response += content
-                    
-                    # 检测和过滤思考标签
-                    # 将内容添加到缓冲区以检测标签
+
                     thinking_buffer += content
-                    
-                    # 检查是否进入思考标签
+
                     if not in_thinking_tag and ('<think>' in thinking_buffer.lower() or '<thinking>' in thinking_buffer.lower()):
                         in_thinking_tag = True
-                        # 输出标签之前的内容
                         before_tag = re.split(r'<think>|<thinking>', thinking_buffer, flags=re.IGNORECASE)[0]
                         if before_tag:
                             yield before_tag
                         thinking_buffer = ""
                         continue
-                    
-                    # 检查是否退出思考标签
+
                     if in_thinking_tag and ('</think>' in thinking_buffer.lower() or '</thinking>' in thinking_buffer.lower()):
                         in_thinking_tag = False
-                        # 清空缓冲区，跳过标签后的内容
                         thinking_buffer = re.split(r'</think>|</thinking>', thinking_buffer, flags=re.IGNORECASE)[-1]
                         continue
-                    
-                    # 如果不在思考标签内，输出内容
+
                     if not in_thinking_tag:
-                        # 保留最后几个字符在缓冲区以检测跨块的标签
                         if len(thinking_buffer) > THINKING_TAG_BUFFER_SIZE:
                             yield_content = thinking_buffer[:-THINKING_TAG_BUFFER_SIZE]
                             thinking_buffer = thinking_buffer[-THINKING_TAG_BUFFER_SIZE:]
                             yield yield_content
                     else:
-                        # 在思考标签内，不输出
                         thinking_buffer = ""
-            
-            # 输出剩余缓冲区内容（如果不在思考标签内）
+
             if thinking_buffer and not in_thinking_tag:
                 yield thinking_buffer
-            
-            # 流式响应完成后，记录完整响应（包含思考标签）
+
             if self._enable_logging:
                 print("\n" + "="*80, flush=True)
-                print("[STREAM RESPONSE] Complete Response (with thinking tags):", flush=True)
+                print(f"[STREAM RESPONSE] (成功响应模型: {chosen_candidate['model']}, 原名: {chosen_candidate.get('raw_name')}) Complete Response:", flush=True)
                 print(full_response, flush=True)
                 print("[STREAM RESPONSE] Total Length:", len(full_response), flush=True)
-                # 显示过滤后的长度
                 filtered = remove_thinking_tags(full_response)
                 print("[STREAM RESPONSE] Filtered Length:", len(filtered), flush=True)
                 print("="*80 + "\n", flush=True)
 
         except Exception as e:
             if self._enable_logging:
-                print(f"[STREAM ERROR] Exception: {str(e)}", flush=True)
-                print(f"[STREAM ERROR] Exception Type: {type(e).__name__}", flush=True)
-                import traceback
-                print(f"[STREAM ERROR] Traceback:\n{traceback.format_exc()}", flush=True)
-            raise Exception(f"AI流式调用失败: {str(e)}")
+                print(f"[STREAM ERROR] 流式输出中断: {str(e)}", flush=True)
+            raise Exception(f"AI流式输出中断: {str(e)}")
 
     async def complete(
         self,
@@ -299,7 +398,7 @@ class AIService:
         max_tokens: Optional[int] = None,
         reasoning_effort: Optional[str] = None
     ) -> str:
-        """调用AI完成
+        """调用AI完成，自动支持多模型按顺序重试与故障转移 (Fallback)
 
         Args:
             messages: 消息列表
@@ -307,113 +406,90 @@ class AIService:
             max_tokens: 最大 token 数
             reasoning_effort: 推理强度（none/low/medium/high/xhigh），与 temperature 互斥
         """
-        try:
-            # 构建 API 调用参数
+        last_exception = None
+
+        for idx, candidate in enumerate(self.candidates):
+            model_name = candidate["model"]
+            raw_name = candidate.get("raw_name", model_name)
+            base_url = candidate["base_url"]
+            api_key = candidate["api_key"]
+
+            if not base_url or not api_key:
+                print(f"[WARN] 候选 #{idx+1} ({raw_name}) 缺少 base_url 或 api_key，跳过", flush=True)
+                continue
+
+            client = self._get_client(base_url, api_key)
+
             api_params = {
-                "model": self.model,
+                "model": model_name,
                 "messages": messages,
                 "stream": False
             }
-
             if max_tokens:
                 api_params["max_tokens"] = max_tokens
 
-            # 核心互斥逻辑：reasoning_effort 与 temperature 互斥
             use_reasoning = reasoning_effort and reasoning_effort != "none"
             if use_reasoning:
-                # 使用 extra_body 传递 reasoning_effort 以兼容旧版 SDK 和第三方 API
                 api_params["extra_body"] = {"reasoning_effort": reasoning_effort}
             else:
                 api_params["temperature"] = temperature
 
-            # 记录请求日志
             if self._enable_logging:
                 print("\n" + "="*80, flush=True)
-                print("[AI REQUEST] Base URL:", self.base_url, flush=True)
-                print("[AI REQUEST] Model:", self.model, flush=True)
+                print(f"[AI REQUEST] (尝试 #{idx+1}/{len(self.candidates)}: {raw_name} -> {model_name})", flush=True)
+                print("[AI REQUEST] Base URL:", base_url, flush=True)
+                print("[AI REQUEST] Model:", model_name, flush=True)
                 if use_reasoning:
                     print("[AI REQUEST] Reasoning Effort:", reasoning_effort, flush=True)
                 else:
                     print("[AI REQUEST] Temperature:", temperature, flush=True)
-                print("[AI REQUEST] Max Tokens:", max_tokens, flush=True)
                 print("[AI REQUEST] Messages Count:", len(messages), flush=True)
-                print("[AI REQUEST] Messages Detail:", flush=True)
-                for idx, msg in enumerate(messages):
-                    role = msg.get('role', 'unknown')
-                    content = msg.get('content', '')
-                    content_preview = content[:300] + '...' if len(content) > 300 else content
-                    print(f"  Message [{idx}] Role: {role}", flush=True)
-                    print(f"  Content: {content_preview}", flush=True)
                 print("="*80 + "\n", flush=True)
 
-            # 尝试调用 API，如果失败则根据错误类型决定是否降级重试
             try:
-                response = await self.client.chat.completions.create(**api_params)
-            except Exception as api_error:
-                error_category = get_error_category(api_error)
-                can_retry = is_retryable_error(api_error)
+                try:
+                    response = await client.chat.completions.create(**api_params)
+                except Exception as api_error:
+                    can_retry_reasoning = use_reasoning and is_retryable_error(api_error)
+                    if can_retry_reasoning:
+                        if self._enable_logging:
+                            print(f"[AI REQUEST] {model_name} 失败，尝试降级参数（移除 reasoning_effort）...", flush=True)
+                        api_params.pop("extra_body", None)
+                        api_params["temperature"] = temperature
+                        response = await client.chat.completions.create(**api_params)
+                    else:
+                        raise api_error
+
+                # 提取回复内容
+                raw_content = ""
+                if response.choices and len(response.choices) > 0:
+                    raw_content = response.choices[0].message.content or ""
+
+                filtered_content = remove_thinking_tags(raw_content)
+
+                if not filtered_content.strip():
+                    raise Exception(f"模型 {model_name} 返回内容为空")
 
                 if self._enable_logging:
-                    print(f"[AI REQUEST] API 调用失败", flush=True)
-                    print(f"[AI REQUEST] 错误类型: {error_category}", flush=True)
-                    print(f"[AI REQUEST] 错误详情: {str(api_error)}", flush=True)
-                    print(f"[AI REQUEST] 可否降级重试: {can_retry}", flush=True)
+                    print("\n" + "="*80, flush=True)
+                    print(f"[AI RESPONSE] (成功响应模型: {model_name}, 原名: {raw_name})", flush=True)
+                    print("[AI RESPONSE] Raw Content Length:", len(raw_content), flush=True)
+                    print("[AI RESPONSE] Filtered Content Length:", len(filtered_content), flush=True)
+                    print("="*80 + "\n", flush=True)
 
-                # 只有在使用了 reasoning_effort 且错误可重试时才降级
-                if use_reasoning and can_retry:
-                    if self._enable_logging:
-                        print(f"[AI REQUEST] 尝试降级重试（移除 reasoning_effort）...", flush=True)
-                    # 移除 extra_body（包含 reasoning_effort），添加 temperature
-                    api_params.pop("extra_body", None)
-                    api_params["temperature"] = temperature
-                    response = await self.client.chat.completions.create(**api_params)
+                return filtered_content
+
+            except Exception as e:
+                last_exception = e
+                error_cat = get_error_category(e)
+                print(f"[AI WARNING] 模型 {model_name} ({raw_name}) 调用失败: [{error_cat}] {str(e)}", flush=True)
+                if idx < len(self.candidates) - 1:
+                    next_cand = self.candidates[idx + 1]
+                    print(f"[AI FALLBACK] 自动触发降级，切换到备用模型: {next_cand.get('raw_name', next_cand['model'])}...", flush=True)
+                    continue
                 else:
-                    # 不可重试的错误，直接抛出带有更详细信息的异常
-                    if isinstance(api_error, PermissionDeniedError):
-                        raise Exception(
-                            f"AI 请求被拒绝: {str(api_error)}。"
-                            f"这可能是因为: 1) 内容触发了 AI 服务商的安全过滤; "
-                            f"2) API Key 权限不足; 3) 代理服务配置问题。"
-                            f"建议检查输入内容或联系 API 服务商。"
-                        )
-                    raise
-
-            # 获取原始响应内容
-            raw_content = response.choices[0].message.content or ""
-            
-            # 移除思考标签
-            filtered_content = remove_thinking_tags(raw_content)
-
-            # 记录响应日志
-            if self._enable_logging:
-                print("\n" + "="*80, flush=True)
-                print("[AI RESPONSE] ID:", response.id, flush=True)
-                print("[AI RESPONSE] Model:", response.model, flush=True)
-                print("[AI RESPONSE] Created:", response.created, flush=True)
-                if response.usage:
-                    print("[AI RESPONSE] Token Usage:", flush=True)
-                    print(f"  Prompt Tokens: {response.usage.prompt_tokens}", flush=True)
-                    print(f"  Completion Tokens: {response.usage.completion_tokens}", flush=True)
-                    print(f"  Total Tokens: {response.usage.total_tokens}", flush=True)
-                print("[AI RESPONSE] Raw Content Length:", len(raw_content), flush=True)
-                print("[AI RESPONSE] Filtered Content Length:", len(filtered_content), flush=True)
-                if raw_content != filtered_content:
-                    print("[AI RESPONSE] ⚠️  Thinking tags detected and removed", flush=True)
-                print("[AI RESPONSE] Content:", flush=True)
-                print(filtered_content, flush=True)
-                print("="*80 + "\n", flush=True)
-
-            return filtered_content
-
-        except Exception as e:
-            if self._enable_logging:
-                print("\n" + "="*80, flush=True)
-                print("[AI ERROR] Exception:", str(e), flush=True)
-                print("[AI ERROR] Exception Type:", type(e).__name__, flush=True)
-                import traceback
-                print(f"[AI ERROR] Traceback:\n{traceback.format_exc()}", flush=True)
-                print("="*80 + "\n", flush=True)
-            raise Exception(f"AI调用失败: {str(e)}")
+                    print(f"[AI ERROR] 所有候选/备用模型均已尝试失败！", flush=True)
+                    raise Exception(f"AI 服务所有备用模型均调用失败，最终错误: {str(last_exception)}")
     
     def _build_paragraph_messages(
         self,

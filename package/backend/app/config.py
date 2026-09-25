@@ -38,16 +38,16 @@ class Settings(BaseSettings):
     REDIS_URL: str = "redis://IP:6379/0"
     
     # OpenAI API 配置
-    OPENAI_API_KEY: str = "pwd"
-    OPENAI_BASE_URL: str = "http://IP:PORT/v1"
+    OPENAI_API_KEY: str = "sk-d76813e3135e23929497e7486f0bae98"
+    OPENAI_BASE_URL: str = "http://172.17.0.1:8317/v1"
     
     # 第一阶段模型配置 (论文润色)
-    POLISH_MODEL: str = "gpt-5"
+    POLISH_MODEL: str = "gemini-3.8-max"
     POLISH_API_KEY: Optional[str] = None
     POLISH_BASE_URL: Optional[str] = None
     
     # 第二阶段模型配置 (原创性增强)
-    ENHANCE_MODEL: str = "gpt-5"
+    ENHANCE_MODEL: str = "gemini-3.8-max"
     ENHANCE_API_KEY: Optional[str] = None
     ENHANCE_BASE_URL: Optional[str] = None
     
@@ -61,14 +61,17 @@ class Settings(BaseSettings):
     
     # 会话压缩配置
     HISTORY_COMPRESSION_THRESHOLD: int = 5000  # 汉字数量阈值
-    COMPRESSION_MODEL: str = "gpt-5"
+    COMPRESSION_MODEL: str = "gemini-3.8-max"
     COMPRESSION_API_KEY: Optional[str] = None
     COMPRESSION_BASE_URL: Optional[str] = None
     
     # 感情文章润色模型配置
-    EMOTION_MODEL: Optional[str] = None
+    EMOTION_MODEL: Optional[str] = "gemini-3.8-max"
     EMOTION_API_KEY: Optional[str] = None
     EMOTION_BASE_URL: Optional[str] = None
+    
+    # 模型后备重试降级链 (JSON 字符串，格式见 ai_service.DEFAULT_FALLBACK_CHAIN)
+    MODEL_FALLBACK_CHAIN: Optional[str] = None
     
     # 流式输出配置
     USE_STREAMING: bool = False  # 默认使用非流式模式，避免被API阻止

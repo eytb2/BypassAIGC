@@ -4,11 +4,54 @@ import toast from 'react-hot-toast';
 import {
   FileText, History, LogOut, Play,
   Users, Clock, AlertCircle, CheckCircle, Trash2, Info,
-  Upload, FileUp, Loader2, Sparkles
+  Upload, FileUp, Loader2, Sparkles, ChevronRight, X
 } from 'lucide-react';
 import { optimizationAPI, wordOptAPI } from '../api';
 
-// Word 会话列表项组件
+// 各模式原理与详细配置
+const MODES_CONFIG = [
+  {
+    id: 'paper_polish',
+    title: '论文润色',
+    desc: '提升学术表达质量',
+    badge: '学术规范',
+    principleTitle: '规范学术语体 & 修复语病逻辑',
+    principleSummary: '严格遵循高水平学术期刊语体规范（Register），修正长从句从属关系混乱、语病与口语化痕迹；优化语篇论证推导节奏，增强学术说服力。',
+    mechanism: '基于学术期刊规范 Prompt 约束，重点检测并修正口语化词汇、繁复多余从句与动宾失配，保留专有名词与数据。',
+    tags: ['规范术语', '精炼长句', '语篇衔接']
+  },
+  {
+    id: 'paper_enhance',
+    title: '论文增强',
+    desc: '直接提升原创性',
+    badge: '深度去AI',
+    principleTitle: '瓦解大模型统计特征 & 倒装重组',
+    principleSummary: '深度对抗知网 3.0 / 万方 / PaperPass 等大模型检测算法。重组主被动语序与倒装结构，彻底剔除高频 AI 八股套话，大幅提升困惑度 (PPL) 与突发度 (Burstiness)。',
+    mechanism: '通过 8 大类 50+ 种高危 AI 统计模板库识别特征语句，利用句式倒装、语段重塑与实质性论证替换空洞套话，彻底打破大模型平滑概率。',
+    tags: ['结构重组', '剔除套话', '打破平滑PPL']
+  },
+  {
+    id: 'paper_polish_enhance',
+    title: '润色 + 增强',
+    desc: '两阶段完整处理 (推荐)',
+    badge: '全能首选',
+    principleTitle: '两阶段流水线：先破特征再提质',
+    principleSummary: '【两阶段全能流水线】Phase 1 强力瓦解 AI 统计模板与重复模式，打破概率平滑性；Phase 2 进行学术级语篇精炼与逻辑缝合。兼具极低 AIGC 疑似度与极高的学术严谨性。',
+    mechanism: '结合了论文增强的降 AIGC 能力与论文润色的学术严谨性，先破坏检测器特征，再保证学术期刊级别的语法和行文流畅度，综合效果最佳。',
+    tags: ['两阶段处理', '极低AIGC', '高学术水准']
+  },
+  {
+    id: 'emotion_polish',
+    title: '感情文章润色',
+    desc: '自然、人性化表达',
+    badge: '生活人情味',
+    principleTitle: '消除机械说教 & 恢复真挚情感',
+    principleSummary: '专为散文、随笔、公文与情感文章打造。彻底消除 AI 大模型自带的冰冷总结癖、机械分析与高高在上的说教味，转换为真实自然、富有生活烟火气与共情力的人格化叙事口吻。',
+    mechanism: '约束大模型使用生活化口吻，注入心理画面感与细节情绪描摹，消除机械的“综上所述”、“我们应该”等说教句式，恢复鲜活真挚的人性化表达。',
+    tags: ['消除说教', '生活化叙述', '情感共鸣']
+  }
+];
+
 const MODE_NAMES = {
   paper_polish: '论文润色',
   paper_enhance: '论文增强',
@@ -177,7 +220,7 @@ const SessionItem = memo(({ session, activeSession, onView, onDelete, onRetry })
 SessionItem.displayName = 'SessionItem';
 
 const WorkspacePage = () => {
-  const [taskTab, setTaskTab] = useState('text'); // 'text' | 'word'
+  const [taskTab, setTaskTab] = useState('word'); // 'text' | 'word' - 默认进入 Word 全文处理
   const [text, setText] = useState('');
   const [processingMode, setProcessingMode] = useState('paper_polish_enhance');
   const [sessions, setSessions] = useState([]);
@@ -189,6 +232,7 @@ const WorkspacePage = () => {
   const [isLoadingSessions, setIsLoadingSessions] = useState(false);
   const [isLoadingWordSessions, setIsLoadingWordSessions] = useState(false);
   const [isUploadingWord, setIsUploadingWord] = useState(false);
+  const [showPrincipleModal, setShowPrincipleModal] = useState(null); // null | 'overview' | 'paper_polish' | 'paper_enhance' | 'paper_polish_enhance' | 'emotion_polish'
   const navigate = useNavigate();
 
   // 加载 Word 会话列表
@@ -219,11 +263,12 @@ const WorkspacePage = () => {
 
     try {
       setIsUploadingWord(true);
-      toast.loading('正在上传并启动 Word 文档智能检索优化...', { id: 'word-upload' });
+      toast.loading('正在上传并加载 Word 在线文档...', { id: 'word-upload' });
       const res = await wordOptAPI.uploadDocx(file, processingMode);
       setActiveWordSession(res.data.session_id);
-      toast.success('Word 降重优化任务已启动，正在后台检索与生成修改推荐...', { id: 'word-upload' });
-      loadWordSessions();
+      toast.success('上传成功，正在进入在线文档...', { id: 'word-upload' });
+      // 核心修复过度问题：上传成功后立即平滑跳转进入在线文档页面，避免在工作台界面假死或卡住
+      navigate(`/word-session/${res.data.session_id}`);
     } catch (err) {
       console.error('Word 上传解析失败:', err);
       toast.error(err.response?.data?.detail || 'Word 文档解析失败', { id: 'word-upload' });
@@ -536,7 +581,7 @@ const WorkspacePage = () => {
               </div>
 
               {/* 任务类型切换：文本粘贴 vs Word文档 */}
-              <div className="flex bg-gray-100 p-1 rounded-xl mb-5 max-w-sm">
+              <div className="flex bg-gray-100 p-1 rounded-xl mb-5 max-w-md">
                 <button
                   type="button"
                   onClick={() => setTaskTab('text')}
@@ -558,8 +603,18 @@ const WorkspacePage = () => {
                       : 'text-gray-500 hover:text-black'
                   }`}
                 >
-                  <Upload className="w-3.5 h-3.5 text-ios-blue" />
-                  <span>Word 文档降重 (新)</span>
+                  <Upload className="w-3.5 h-3.5 text-ios-blue flex-shrink-0" />
+                  <span>Word 去AIGC & 降重</span>
+                  <span
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setShowPrincipleModal('overview');
+                    }}
+                    className="inline-flex items-center justify-center w-4 h-4 rounded-full bg-amber-100 text-amber-700 hover:bg-amber-200 text-[11px] font-bold cursor-pointer transition-colors ml-0.5"
+                    title="点击查看去 AIGC & 降重核心原理"
+                  >
+                    !
+                  </span>
                 </button>
               </div>
 
@@ -567,38 +622,42 @@ const WorkspacePage = () => {
                 <div className="space-y-5">
                   {/* 处理模式选择 - 与 txt 文本模式一致 */}
                   <div>
-                    <label className="block text-[13px] font-medium text-ios-gray mb-2 ml-1 uppercase tracking-wide">
-                      选择模式
-                    </label>
+                    <div className="mb-2 ml-1">
+                      <label className="text-[13px] font-medium text-ios-gray uppercase tracking-wide">
+                        选择模式
+                      </label>
+                    </div>
                     <div className="space-y-3">
-                      {[
-                        { id: 'paper_polish', title: '论文润色', desc: '提升学术表达质量' },
-                        { id: 'paper_enhance', title: '论文增强', desc: '直接提升原创性' },
-                        { id: 'paper_polish_enhance', title: '润色 + 增强', desc: '两阶段完整处理' },
-                        { id: 'emotion_polish', title: '感情文章润色', desc: '自然、人性化表达' }
-                      ].map((mode) => (
+                      {MODES_CONFIG.map((mode) => (
                         <label
                           key={mode.id}
-                          className={`flex items-center p-3.5 rounded-xl cursor-pointer transition-all border ${
+                          className={`flex items-center justify-between p-3.5 rounded-xl cursor-pointer transition-all border ${
                             processingMode === mode.id
                               ? 'bg-blue-50 border-ios-blue ring-1 ring-ios-blue/20'
                               : 'bg-white border-gray-200 hover:bg-gray-50'
                           }`}
                         >
-                          <input
-                            type="radio"
-                            name="processingModeWord"
-                            value={mode.id}
-                            checked={processingMode === mode.id}
-                            onChange={(e) => setProcessingMode(e.target.value)}
-                            className="mr-3 w-5 h-5 text-ios-blue focus:ring-ios-blue border-gray-300"
-                          />
-                          <div>
-                            <div className={`font-semibold text-[15px] ${processingMode === mode.id ? 'text-ios-blue' : 'text-black'}`}>
-                              {mode.title}
-                            </div>
-                            <div className="text-[13px] text-ios-gray mt-0.5">
-                              {mode.desc}
+                          <div className="flex items-center min-w-0 flex-1">
+                            <input
+                              type="radio"
+                              name="processingModeWord"
+                              value={mode.id}
+                              checked={processingMode === mode.id}
+                              onChange={(e) => setProcessingMode(e.target.value)}
+                              className="mr-3 w-5 h-5 text-ios-blue focus:ring-ios-blue border-gray-300 flex-shrink-0"
+                            />
+                            <div className="min-w-0 pr-2">
+                              <div className="flex items-center gap-2">
+                                <span className={`font-semibold text-[15px] ${processingMode === mode.id ? 'text-ios-blue' : 'text-black'}`}>
+                                  {mode.title}
+                                </span>
+                                <span className="text-[11px] px-1.5 py-0.5 rounded bg-blue-100/70 text-ios-blue font-medium hidden sm:inline">
+                                  {mode.badge}
+                                </span>
+                              </div>
+                              <div className="text-[13px] text-ios-gray mt-0.5 truncate">
+                                {mode.desc}
+                              </div>
                             </div>
                           </div>
                         </label>
@@ -655,38 +714,42 @@ const WorkspacePage = () => {
                 <>
                   {/* 处理模式选择 - iOS Segmented Control Style */}
                   <div className="mb-5">
-                    <label className="block text-[13px] font-medium text-ios-gray mb-2 ml-1 uppercase tracking-wide">
-                      选择模式
-                    </label>
+                    <div className="mb-2 ml-1">
+                      <label className="text-[13px] font-medium text-ios-gray uppercase tracking-wide">
+                        选择模式
+                      </label>
+                    </div>
                     <div className="space-y-3">
-                      {[
-                        { id: 'paper_polish', title: '论文润色', desc: '提升学术表达质量' },
-                        { id: 'paper_enhance', title: '论文增强', desc: '直接提升原创性' },
-                        { id: 'paper_polish_enhance', title: '润色 + 增强', desc: '两阶段完整处理' },
-                        { id: 'emotion_polish', title: '感情文章润色', desc: '自然、人性化表达' }
-                      ].map((mode) => (
+                      {MODES_CONFIG.map((mode) => (
                         <label
                           key={mode.id}
-                          className={`flex items-center p-3.5 rounded-xl cursor-pointer transition-all border ${
+                          className={`flex items-center justify-between p-3.5 rounded-xl cursor-pointer transition-all border ${
                             processingMode === mode.id
                               ? 'bg-blue-50 border-ios-blue ring-1 ring-ios-blue/20'
                               : 'bg-white border-gray-200 hover:bg-gray-50'
                           }`}
                         >
-                          <input
-                            type="radio"
-                            name="processingMode"
-                            value={mode.id}
-                            checked={processingMode === mode.id}
-                            onChange={(e) => setProcessingMode(e.target.value)}
-                            className="mr-3 w-5 h-5 text-ios-blue focus:ring-ios-blue border-gray-300"
-                          />
-                          <div>
-                            <div className={`font-semibold text-[15px] ${processingMode === mode.id ? 'text-ios-blue' : 'text-black'}`}>
-                              {mode.title}
-                            </div>
-                            <div className="text-[13px] text-ios-gray mt-0.5">
-                              {mode.desc}
+                          <div className="flex items-center min-w-0 flex-1">
+                            <input
+                              type="radio"
+                              name="processingMode"
+                              value={mode.id}
+                              checked={processingMode === mode.id}
+                              onChange={(e) => setProcessingMode(e.target.value)}
+                              className="mr-3 w-5 h-5 text-ios-blue focus:ring-ios-blue border-gray-300 flex-shrink-0"
+                            />
+                            <div className="min-w-0 pr-2">
+                              <div className="flex items-center gap-2">
+                                <span className={`font-semibold text-[15px] ${processingMode === mode.id ? 'text-ios-blue' : 'text-black'}`}>
+                                  {mode.title}
+                                </span>
+                                <span className="text-[11px] px-1.5 py-0.5 rounded bg-blue-100/70 text-ios-blue font-medium hidden sm:inline">
+                                  {mode.badge}
+                                </span>
+                              </div>
+                              <div className="text-[13px] text-ios-gray mt-0.5 truncate">
+                                {mode.desc}
+                              </div>
                             </div>
                           </div>
                         </label>
@@ -856,7 +919,7 @@ const WorkspacePage = () => {
                 <div className="flex items-center gap-2">
                   <History className="w-5 h-5 text-ios-gray" />
                   <h2 className="text-[17px] font-bold text-black tracking-tight">
-                    {taskTab === 'word' ? 'Word 降重记录' : '文本润色记录'}
+                    {taskTab === 'word' ? 'Word 去AIGC & 降重记录' : '文本润色记录'}
                   </h2>
                 </div>
 
@@ -894,7 +957,7 @@ const WorkspacePage = () => {
                         <FileText className="w-6 h-6" />
                       </div>
                       <p className="text-ios-gray text-sm">
-                        暂无 Word 降重文档
+                        暂无 Word 去AIGC & 降重文档
                       </p>
                     </div>
                   ) : (
@@ -939,6 +1002,196 @@ const WorkspacePage = () => {
           </div>
         </div>
       </div>
+
+      {/* 技术原理解析与模式指南弹窗 */}
+      {showPrincipleModal && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-xs animate-fade-in"
+          onClick={() => setShowPrincipleModal(null)}
+        >
+          <div
+            className="bg-white rounded-2xl shadow-2xl max-w-2xl w-full max-h-[85vh] flex flex-col overflow-hidden border border-gray-100 animate-scale-up"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* 弹窗头部 */}
+            <div className="p-4 sm:p-5 border-b border-gray-100 flex items-center justify-between bg-gray-50/80">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-xl bg-amber-100 text-amber-600 flex items-center justify-center flex-shrink-0">
+                  <AlertCircle className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-[16px] sm:text-[17px] text-gray-900">
+                    去 AIGC & 降重技术原理与模式指南
+                  </h3>
+                  <p className="text-[12px] text-gray-500">
+                    知网/万方/PaperPass/维普检测对抗机制与算法逻辑全解
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowPrincipleModal(null)}
+                className="p-1.5 text-gray-400 hover:text-gray-700 hover:bg-gray-200/60 rounded-lg transition-colors flex-shrink-0"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* 顶部 Tab 切换 */}
+            <div className="flex border-b border-gray-200 bg-gray-100/70 p-1.5 gap-1 overflow-x-auto custom-scrollbar flex-shrink-0">
+              <button
+                onClick={() => setShowPrincipleModal('overview')}
+                className={`py-1.5 px-3 rounded-lg text-[13px] font-medium transition-all whitespace-nowrap ${
+                  showPrincipleModal === 'overview'
+                    ? 'bg-white text-ios-blue shadow-xs font-semibold'
+                    : 'text-gray-600 hover:text-black'
+                }`}
+              >
+                🔍 核心原理总览
+              </button>
+              {MODES_CONFIG.map((m) => (
+                <button
+                  key={m.id}
+                  onClick={() => setShowPrincipleModal(m.id)}
+                  className={`py-1.5 px-3 rounded-lg text-[13px] font-medium transition-all whitespace-nowrap ${
+                    showPrincipleModal === m.id
+                      ? 'bg-white text-ios-blue shadow-xs font-semibold'
+                      : 'text-gray-600 hover:text-black'
+                  }`}
+                >
+                  {m.title}
+                </button>
+              ))}
+            </div>
+
+            {/* 弹窗主体内容 */}
+            <div className="flex-1 min-h-0 overflow-y-auto p-5 space-y-4 custom-scrollbar">
+              {showPrincipleModal === 'overview' ? (
+                <div className="space-y-4 text-gray-700 text-[14px] leading-relaxed">
+                  {/* 核心对抗机制 */}
+                  <div className="bg-blue-50/60 border border-blue-100 rounded-xl p-4">
+                    <h4 className="font-bold text-blue-900 text-[15px] mb-2 flex items-center gap-1.5">
+                      <Sparkles className="w-4 h-4 text-ios-blue" />
+                      一、知网 3.0 / 万方 / PaperPass 的 AIGC 检测原理
+                    </h4>
+                    <p className="text-[13px] text-gray-600 mb-3">
+                      目前主流学术 AIGC 检测系统并非凭空猜测，而是基于以下三大统计学和自然语言处理（NLP）特征进行打分判定：
+                    </p>
+                    <div className="space-y-2.5 text-[13px]">
+                      <div className="bg-white p-3 rounded-lg border border-blue-100/80">
+                        <div className="font-semibold text-gray-800 mb-0.5">
+                          1. 困惑度 (Perplexity, PPL) — 词汇概率平滑性
+                        </div>
+                        <div className="text-gray-600">
+                          大模型生成文本基于统计概率“选出最可能的下一个词”，因此词与词之间的困惑度极低且极其均匀。而人类写作者在选词、成句时具有高度的个性化跳跃性。系统通过<strong>学术倒装、近义学术术语穿插、语序重排</strong>有效打破平滑分布。
+                        </div>
+                      </div>
+                      <div className="bg-white p-3 rounded-lg border border-blue-100/80">
+                        <div className="font-semibold text-gray-800 mb-0.5">
+                          2. 突发度 (Burstiness) — 句式长短与节奏变化
+                        </div>
+                        <div className="text-gray-600">
+                          AI 文本在句式长短、标点停顿上表现出高度均匀的节律。系统通过<strong>长复合句拆解、短句嵌入、排比与非典型句式交替</strong>，重塑人类思维典型的长短句突发波峰。
+                        </div>
+                      </div>
+                      <div className="bg-white p-3 rounded-lg border border-blue-100/80">
+                        <div className="font-semibold text-gray-800 mb-0.5">
+                          3. 高频大模型模板套话 (N-gram 模式匹配)
+                        </div>
+                        <div className="text-gray-600">
+                          AI 文本极易出现“从...视阈看”、“把...作为...之一”、“综上所述”、“具有重要意义/深远价值”、“深度赋能”、“协同发力”等空洞套话。系统内置 <strong>8 大类 50+ 种高危特征库</strong>，精准捕获并替换为有实质论据支撑的学术表述。
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* 降低查重率原理 */}
+                  <div className="bg-emerald-50/60 border border-emerald-100 rounded-xl p-4">
+                    <h4 className="font-bold text-emerald-900 text-[15px] mb-2 flex items-center gap-1.5">
+                      <CheckCircle className="w-4 h-4 text-emerald-600" />
+                      二、降重（降低传统查重复制比）机制
+                    </h4>
+                    <p className="text-[13px] text-gray-600 leading-relaxed">
+                      知网查重系统以“连续 13 个字符相似”为标红阈值。本系统在<strong>严密保持专有名词、实验数据与因果逻辑</strong>的前提下，对主谓宾骨架重新编码，改变从句从属关系与语态，使连续重复字符完全跌破判定阈值，<strong>兼顾 AIGC 降疑似度与传统查重降重</strong>。
+                    </p>
+                  </div>
+                </div>
+              ) : (
+                (() => {
+                  const currentMode = MODES_CONFIG.find(m => m.id === showPrincipleModal) || MODES_CONFIG[0];
+                  return (
+                    <div className="space-y-4">
+                      <div className="bg-gray-50 border border-gray-200/80 rounded-xl p-4">
+                        <div className="flex items-center justify-between mb-2">
+                          <span className="font-bold text-[16px] text-gray-900">
+                            {currentMode.title}
+                          </span>
+                          <span className="text-[12px] px-2.5 py-0.5 rounded-full bg-blue-100 text-ios-blue font-semibold">
+                            {currentMode.badge}
+                          </span>
+                        </div>
+                        <p className="text-[14px] text-gray-700 font-medium mb-1">
+                          {currentMode.principleTitle}
+                        </p>
+                        <p className="text-[13px] text-gray-500 leading-relaxed">
+                          {currentMode.principleSummary}
+                        </p>
+                      </div>
+
+                      <div className="border border-gray-100 rounded-xl p-4 space-y-3 bg-white shadow-xs">
+                        <h5 className="font-bold text-[14px] text-gray-800 flex items-center gap-1.5">
+                          <Sparkles className="w-4 h-4 text-amber-500" />
+                          底层算法与处理机制
+                        </h5>
+                        <p className="text-[13px] text-gray-600 leading-relaxed">
+                          {currentMode.mechanism}
+                        </p>
+
+                        <div className="pt-2 border-t border-gray-100 flex flex-wrap gap-2">
+                          {currentMode.tags.map((tag, idx) => (
+                            <span
+                              key={idx}
+                              className="text-[12px] bg-blue-50 text-ios-blue px-2.5 py-1 rounded-md font-medium border border-blue-100/60"
+                            >
+                              ✓ {tag}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+
+                      <div className="bg-amber-50/70 border border-amber-200/80 rounded-xl p-3.5 flex items-start gap-2.5 text-[13px] text-amber-800">
+                        <Info className="w-4 h-4 text-amber-600 flex-shrink-0 mt-0.5" />
+                        <div>
+                          <strong>使用建议：</strong>
+                          {currentMode.id === 'paper_polish_enhance'
+                            ? '这是针对毕业论文、学术专著的最强方案，一次性兼顾破除 AIGC 痕迹与提升学术润色质量。'
+                            : currentMode.id === 'paper_enhance'
+                            ? '若论文查重报告中 AIGC 疑似度过高（如 > 40%），建议首选此模式进行深度句式打破与去痕。'
+                            : currentMode.id === 'paper_polish'
+                            ? '若论文查重已达标，但导师指出文字晦涩、语病多、缺乏学术规范，建议选择此模式精细打磨。'
+                            : '适用于文学随笔、散文与评述，消除机器说教，还原自然真挚的人文情感表达。'}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })()
+              )}
+            </div>
+
+            {/* 弹窗底部操作 */}
+            <div className="p-4 border-t border-gray-100 bg-gray-50/80 flex items-center justify-between">
+              <span className="text-[12px] text-gray-500">
+                点击外部空白处或右上角可关闭指南
+              </span>
+              <button
+                onClick={() => setShowPrincipleModal(null)}
+                className="px-5 py-2 bg-ios-blue text-white rounded-xl text-[14px] font-medium hover:bg-blue-600 transition-colors shadow-xs"
+              >
+                我知道了
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
