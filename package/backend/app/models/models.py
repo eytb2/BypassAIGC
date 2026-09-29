@@ -17,6 +17,7 @@ class User(Base):
     last_used = Column(DateTime, nullable=True)
     usage_limit = Column(Integer, default=settings.DEFAULT_USAGE_LIMIT)
     usage_count = Column(Integer, default=0)
+    email = Column(String(255), unique=True, index=True, nullable=True)
     
     # 关系
     sessions = relationship("OptimizationSession", back_populates="user")
@@ -174,3 +175,15 @@ class SavedSpec(Base):
 
     # 关系
     user = relationship("User", back_populates="saved_specs")
+
+
+class EmailVerificationCode(Base):
+    """邮箱验证码记录表"""
+    __tablename__ = "email_verification_codes"
+
+    id = Column(Integer, primary_key=True, index=True)
+    email = Column(String(255), index=True, nullable=False)
+    code = Column(String(10), nullable=False)
+    is_used = Column(Boolean, default=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    expires_at = Column(DateTime, nullable=False)

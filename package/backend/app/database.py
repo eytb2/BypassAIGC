@@ -153,6 +153,10 @@ def _migrate_database_schema():
                     if "usage_count" not in user_columns:
                         if _add_column_safely(conn, "users", "usage_count", "INTEGER DEFAULT 0"):
                             print("  ✓ 添加字段: users.usage_count")
+
+                    if "email" not in user_columns:
+                        if _add_column_safely(conn, "users", "email", "VARCHAR(255)"):
+                            print("  ✓ 添加字段: users.email")
                     
                     # 更新 NULL 值
                     try:

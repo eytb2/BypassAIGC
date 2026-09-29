@@ -91,6 +91,18 @@ class Settings(BaseSettings):
     # 管理员账户
     ADMIN_USERNAME: str = "admin"
     ADMIN_PASSWORD: str = "admin123"
+
+    # SMTP 邮件服务配置 (邮箱验证码与卡密发放)
+    SMTP_HOST: Optional[str] = "smtp.qiye.aliyun.com"
+    SMTP_PORT: int = 465
+    SMTP_USER: Optional[str] = None
+    SMTP_PASSWORD: Optional[str] = None
+    SMTP_FROM: Optional[str] = None
+    SMTP_USE_SSL: bool = True
+    SMTP_USE_TLS: bool = False
+    EMAIL_VERIFY_EXPIRE_MINUTES: int = 10
+    EMAIL_COOLDOWN_SECONDS: int = 60
+    DEFAULT_CARD_USAGE_LIMIT: int = 999999
     
     class Config:
         env_file = get_env_file_path()

@@ -11,7 +11,7 @@ from typing import Dict, Tuple, Optional
 # 先导入 config 以便加载环境变量
 from app.config import settings
 from app.database import init_db
-from app.routes import admin, prompts, optimization, word_opt
+from app.routes import admin, prompts, optimization, word_opt, auth
 from app.word_formatter import router as word_formatter_router
 from app.word_formatter.services import get_job_manager
 from app.database import SessionLocal
@@ -90,6 +90,7 @@ app.add_middleware(
 
 # 注册路由（添加 /api 前缀，与 backend/app/main.py 保持一致）
 app.include_router(admin.router, prefix="/api")
+app.include_router(auth.router, prefix="/api")
 app.include_router(prompts.router, prefix="/api")
 app.include_router(optimization.router, prefix="/api")
 app.include_router(word_formatter_router, prefix="/api")

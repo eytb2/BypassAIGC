@@ -299,4 +299,11 @@ export const wordOptAPI = {
   deleteSession: (sessionId) => api.delete(`/word-opt/session/${sessionId}`),
 };
 
+// 认证与卡密发放 API
+export const authAPI = {
+  sendCode: (email) => api.post('/auth/send-code', { email }),
+  verifyCode: (email, code) => api.post('/auth/verify-code', { email, code }),
+  verifyCardKey: (cardKey) => api.post('/admin/verify-card-key', { card_key: cardKey }),
+};
+
 export default api;

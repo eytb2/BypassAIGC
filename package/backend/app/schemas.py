@@ -19,6 +19,7 @@ class UserResponse(BaseModel):
     last_used: Optional[datetime] = None
     usage_limit: int
     usage_count: int
+    email: Optional[str] = None
     
     class Config:
         from_attributes = True
@@ -180,3 +181,30 @@ class PromptResponse(BaseModel):
     
     class Config:
         from_attributes = True
+
+
+class SendCodeRequest(BaseModel):
+    """发送邮箱验证码请求"""
+    email: str
+
+
+class SendCodeResponse(BaseModel):
+    """发送邮箱验证码响应"""
+    success: bool
+    message: str
+    remaining_seconds: Optional[int] = None
+    debug_code: Optional[str] = None
+
+
+class VerifyCodeRequest(BaseModel):
+    """验证邮箱并获取卡密请求"""
+    email: str
+    code: str
+
+
+class VerifyCodeResponse(BaseModel):
+    """验证邮箱并获取卡密响应"""
+    success: bool
+    card_key: str
+    message: str
+    is_new: bool = False
