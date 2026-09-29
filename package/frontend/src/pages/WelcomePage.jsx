@@ -94,13 +94,14 @@ const WelcomePage = () => {
       if (response.data.success) {
         toast.success(response.data.message || '验证码已发送至您的邮箱');
         startCountdown(response.data.remaining_seconds || 60);
-        // 如果后端处于未配置 SMTP 的调试模式，贴心填入或提示
+        // 如果后端处于未配置 SMTP 的调试模式，贴心自动填入并提示
         if (response.data.debug_code) {
+          setCode(response.data.debug_code);
           toast((t) => (
             <div className="text-xs">
-              <span className="font-bold">后台测试提示：</span>验证码已生成 <code>{response.data.debug_code}</code>
+              <span className="font-bold text-amber-600">测试模式提示：</span>服务端未配置发信邮箱凭据，验证码 <code>{response.data.debug_code}</code> 已为您自动填入！
             </div>
-          ), { duration: 6000 });
+          ), { duration: 8000 });
         }
       }
     } catch (error) {
