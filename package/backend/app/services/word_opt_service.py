@@ -320,8 +320,7 @@ def parse_docx_to_session(
     filename: str,
     processing_mode: str = "paper_polish_enhance",
     user_id: Optional[int] = None,
-    user_email: Optional[str] = None,
-    card_key: Optional[str] = None
+    user_email: Optional[str] = None
 ) -> Dict[str, Any]:
     """读取 docx 并构建文档的结构化 AST / Session 数据"""
     session_id = str(uuid.uuid4())
@@ -391,7 +390,6 @@ def parse_docx_to_session(
         "modified_count": 0,
         "user_id": user_id,
         "user_email": user_email,
-        "card_key": card_key,
         "paragraphs": paragraphs
     }
 
@@ -428,7 +426,10 @@ def get_session(session_id: str) -> Optional[Dict[str, Any]]:
     for _ in range(3):
         try:
             with open(json_path, "r", encoding="utf-8") as f:
-                return json.load(f)
+                data = json.load(f)
+                if isinstance(data, dict):
+                    data.pop("card_key", None)
+                return data
         except Exception as e:
             last_err = e
             time.sleep(0.04)
@@ -440,7 +441,8 @@ def get_session(session_id: str) -> Optional[Dict[str, Any]]:
 def list_sessions(
     user_id: Optional[int] = None,
     is_admin: bool = False,
-    user_dict: Optional[Dict[int, Dict[str, Any]]] = None
+    user_dict: Optional[Dict[int, Dict[str, Any]]] = None,
+    email_filter: Optional[str] = None
 ) -> List[Dict[str, Any]]:
     """列出 Word 降重会话（普通用户仅看本人，管理员看全量且按邮箱展示）"""
     sessions = []
@@ -466,10 +468,16 @@ def list_sessions(
                     if not email and user_dict and s_user_id in user_dict:
                         email = user_dict[s_user_id].get("email")
                     if not email:
-                        if s_user_id == 1 or data.get("card_key") == "AIGC888888":
+                        if user_dict and s_user_id in user_dict and user_dict[s_user_id].get("is_admin"):
+                            email = "管理员自建"
+                        elif s_user_id == 1 or data.get("card_key") == "AIGC888888":
                             email = "管理员自建"
                         else:
                             email = "未绑定邮箱"
+
+                    if is_admin and email_filter and email_filter != "all":
+                        if email != email_filter:
+                            continue
 
                     sessions.append({
                         "session_id": data["session_id"],

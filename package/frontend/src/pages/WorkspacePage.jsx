@@ -515,6 +515,8 @@ const WorkspacePage = () => {
 
   const handleLogout = useCallback(() => {
     localStorage.removeItem('cardKey');
+    localStorage.removeItem('isAdmin');
+    localStorage.removeItem('userEmail');
     navigate('/');
   }, [navigate]);
 
@@ -1031,7 +1033,7 @@ const WorkspacePage = () => {
                     className="bg-white border border-blue-200/80 rounded-md px-2 py-1 text-xs text-gray-800 font-medium focus:outline-none focus:ring-1 focus:ring-blue-500 shadow-2xs max-w-[160px] truncate"
                   >
                     <option value="all">
-                      全部用户 ({taskTab === 'word' ? wordSessions.length : sessions.length})
+                      全部记录 ({taskTab === 'word' ? wordSessions.length : sessions.length})
                     </option>
                     {emailList.map(em => {
                       const count = (taskTab === 'word' ? wordSessions : sessions).filter(s => s.user_email === em).length;

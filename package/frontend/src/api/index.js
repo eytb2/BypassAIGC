@@ -37,6 +37,8 @@ api.interceptors.response.use(
   (error) => {
     if (error.response?.status === 401) {
       localStorage.removeItem('cardKey');
+      localStorage.removeItem('isAdmin');
+      localStorage.removeItem('userEmail');
       window.location.href = '/';
     }
     return Promise.reject(error);
@@ -91,7 +93,8 @@ export const optimizationAPI = {
       params: sessionId ? { session_id: sessionId } : {},
       timeout: 10000, // 10秒超时
     }),
-  listSessions: () => api.get('/optimization/sessions', {
+  listSessions: (email = null) => api.get('/optimization/sessions', {
+    params: email ? { email } : {},
     timeout: 15000, // 15秒超时
   }),
   getSessionDetail: (sessionId) =>
@@ -296,10 +299,16 @@ export const wordOptAPI = {
     }),
   restoreSentence: (sessionId, sentenceId) =>
     api.post(`/word-opt/session/${sessionId}/restore`, { sentence_id: sentenceId }),
-  exportDocxUrl: (sessionId) => `/api/word-opt/session/${sessionId}/export`,
+  exportDocxUrl: (sessionId) => {
+    const cardKey = localStorage.getItem('cardKey');
+    const params = cardKey ? `?card_key=${encodeURIComponent(cardKey)}` : '';
+    return `/api/word-opt/session/${sessionId}/export${params}`;
+  },
   getDocxBlob: (sessionId) => api.get(`/word-opt/session/${sessionId}/docx`, { responseType: 'arraybuffer' }),
   batchApplyAll: (sessionId) => api.post(`/word-opt/session/${sessionId}/apply-all`),
-  listSessions: () => api.get('/word-opt/sessions'),
+  listSessions: (email = null) => api.get('/word-opt/sessions', {
+    params: email ? { email } : {},
+  }),
   deleteSession: (sessionId) => api.delete(`/word-opt/session/${sessionId}`),
 };
 

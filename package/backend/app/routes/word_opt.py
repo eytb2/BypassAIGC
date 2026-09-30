@@ -75,6 +75,34 @@ async def prefetch_suggestions_background(session_id: str):
         save_session(session)
 
 
+def is_admin_user(user: User) -> bool:
+    return bool(getattr(user, "is_admin", False) or user.card_key == "AIGC888888")
+
+
+def get_user_word_session(
+    session_id: str,
+    card_key: Optional[str] = Query(None),
+    db: Session = Depends(get_db)
+) -> tuple:
+    """统一校验用户身份与 Word 会话归属（防越权 IDOR）"""
+    if not card_key:
+        raise HTTPException(status_code=401, detail="缺少卡密")
+
+    user = db.query(User).filter(User.card_key == card_key, User.is_active.is_(True)).first()
+    if not user:
+        raise HTTPException(status_code=401, detail="无效的卡密")
+
+    session = get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="会话不存在")
+
+    is_admin = is_admin_user(user)
+    if not is_admin and session.get("user_id") != user.id:
+        raise HTTPException(status_code=404, detail="会话不存在或无权访问")
+
+    return session, user
+
+
 @router.post("/upload")
 async def upload_docx(
     file: UploadFile = File(...),
@@ -89,18 +117,21 @@ async def upload_docx(
     if not file.filename.lower().endswith(".docx"):
         raise HTTPException(status_code=400, detail="目前仅支持上传 .docx 格式的 Word 文档")
 
+    effective_card_key = card_key or card_key_f
+    if not effective_card_key:
+        raise HTTPException(status_code=401, detail="缺少卡密，请先登录")
+
+    user = db.query(User).filter(User.card_key == effective_card_key, User.is_active.is_(True)).first()
+    if not user:
+        raise HTTPException(status_code=401, detail="无效的卡密")
+
     mode = processing_mode or mode_q or "paper_polish_enhance"
     valid_modes = ['paper_polish', 'paper_enhance', 'paper_polish_enhance', 'emotion_polish']
     if mode not in valid_modes:
         mode = "paper_polish_enhance"
 
-    effective_card_key = card_key or card_key_f
-    user = None
-    if effective_card_key:
-        user = db.query(User).filter(User.card_key == effective_card_key, User.is_active.is_(True)).first()
-
-    user_id = user.id if user else None
-    user_email = user.email if user else None
+    user_id = user.id
+    user_email = user.email
 
     # 临时落盘
     with tempfile.NamedTemporaryFile(delete=False, suffix=".docx") as tmp:
@@ -113,8 +144,7 @@ async def upload_docx(
             file.filename,
             processing_mode=mode,
             user_id=user_id,
-            user_email=user_email,
-            card_key=effective_card_key
+            user_email=user_email
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Word 文档解析失败: {str(e)}")
@@ -130,11 +160,9 @@ async def upload_docx(
 
 
 @router.get("/session/{session_id}/progress")
-async def get_word_session_progress(session_id: str):
+async def get_word_session_progress(session_and_user: tuple = Depends(get_user_word_session)):
     """获取 Word 会话的优化处理进度（与 txt 优化进度接口对齐）"""
-    session = get_session(session_id)
-    if not session:
-        raise HTTPException(status_code=404, detail="会话不存在")
+    session, _ = session_and_user
     return {
         "session_id": session["session_id"],
         "filename": session.get("filename"),
@@ -151,20 +179,20 @@ async def get_word_session_progress(session_id: str):
 
 
 @router.get("/session/{session_id}")
-async def get_word_session(session_id: str):
+async def get_word_session(session_and_user: tuple = Depends(get_user_word_session)):
     """获取会话当前状态与文档数据"""
-    session = get_session(session_id)
-    if not session:
-        raise HTTPException(status_code=404, detail="会话不存在")
+    session, _ = session_and_user
     return session
 
 
 @router.post("/session/{session_id}/generate-suggestion")
-async def generate_suggestion_for_sentence(session_id: str, req: GenerateSuggestionRequest):
+async def generate_suggestion_for_sentence(
+    req: GenerateSuggestionRequest,
+    session_and_user: tuple = Depends(get_user_word_session)
+):
     """按需为特定句子生成 3 条修改建议"""
-    session = get_session(session_id)
-    if not session:
-        raise HTTPException(status_code=404, detail="会话不存在")
+    session, _ = session_and_user
+    session_id = session["session_id"]
 
     mode = session.get("processing_mode", "paper_polish_enhance")
 
@@ -211,8 +239,13 @@ async def generate_suggestion_for_sentence(session_id: str, req: GenerateSuggest
 
 
 @router.post("/session/{session_id}/apply")
-async def apply_suggestion(session_id: str, req: ApplySuggestionRequest):
+async def apply_suggestion(
+    req: ApplySuggestionRequest,
+    session_and_user: tuple = Depends(get_user_word_session)
+):
     """确认采纳某一建议"""
+    session, _ = session_and_user
+    session_id = session["session_id"]
     try:
         updated = apply_sentence_suggestion(
             session_id=session_id,
@@ -228,8 +261,13 @@ async def apply_suggestion(session_id: str, req: ApplySuggestionRequest):
 
 
 @router.post("/session/{session_id}/restore")
-async def restore_sentence(session_id: str, req: RestoreSentenceRequest):
+async def restore_sentence(
+    req: RestoreSentenceRequest,
+    session_and_user: tuple = Depends(get_user_word_session)
+):
     """还原句子为原始状态"""
+    session, _ = session_and_user
+    session_id = session["session_id"]
     try:
         updated = restore_sentence_original(session_id, req.sentence_id)
         return updated
@@ -240,11 +278,10 @@ async def restore_sentence(session_id: str, req: RestoreSentenceRequest):
 
 
 @router.get("/session/{session_id}/docx")
-async def get_word_docx_file(session_id: str):
+async def get_word_docx_file(session_and_user: tuple = Depends(get_user_word_session)):
     """获取当前 Word 会话的 docx 二进制文件（供 docx-preview 标准在线预览渲染）"""
-    session = get_session(session_id)
-    if not session:
-        raise HTTPException(status_code=404, detail="会话不存在")
+    session, _ = session_and_user
+    session_id = session["session_id"]
     try:
         stream = export_modified_docx(session_id)
     except FileNotFoundError as e:
@@ -266,11 +303,10 @@ async def get_word_docx_file(session_id: str):
 
 
 @router.get("/session/{session_id}/export")
-async def export_word(session_id: str):
+async def export_word(session_and_user: tuple = Depends(get_user_word_session)):
     """导出替换修改后的 Word (.docx) 文件"""
-    session = get_session(session_id)
-    if not session:
-        raise HTTPException(status_code=404, detail="会话不存在")
+    session, _ = session_and_user
+    session_id = session["session_id"]
     try:
         stream = export_modified_docx(session_id)
     except FileNotFoundError as e:
@@ -294,6 +330,7 @@ async def export_word(session_id: str):
 @router.get("/sessions")
 async def list_word_sessions(
     card_key: Optional[str] = Query(None),
+    email: Optional[str] = Query(None),
     db: Session = Depends(get_db)
 ):
     """获取 Word 降重历史会话列表（按用户或管理员权限隔离）"""
@@ -304,14 +341,14 @@ async def list_word_sessions(
     if not user:
         raise HTTPException(status_code=401, detail="无效的卡密")
 
-    is_admin = bool(getattr(user, "is_admin", False) or user.card_key == "AIGC888888")
+    is_admin = is_admin_user(user)
 
     user_dict = None
     if is_admin:
         all_users = db.query(User).all()
         user_dict = {u.id: {"email": u.email, "is_admin": getattr(u, "is_admin", False)} for u in all_users}
 
-    return list_sessions(user_id=user.id, is_admin=is_admin, user_dict=user_dict)
+    return list_sessions(user_id=user.id, is_admin=is_admin, user_dict=user_dict, email_filter=email)
 
 
 @router.delete("/session/{session_id}")
@@ -328,7 +365,7 @@ async def remove_word_session(
     if not user:
         raise HTTPException(status_code=401, detail="无效的卡密")
 
-    is_admin = bool(getattr(user, "is_admin", False) or user.card_key == "AIGC888888")
+    is_admin = is_admin_user(user)
     success = delete_session(session_id, user_id=user.id, is_admin=is_admin)
     if not success:
         raise HTTPException(status_code=404, detail="会话不存在或无权删除")
@@ -336,11 +373,10 @@ async def remove_word_session(
 
 
 @router.post("/session/{session_id}/apply-all")
-async def batch_apply_all(session_id: str):
+async def batch_apply_all(session_and_user: tuple = Depends(get_user_word_session)):
     """一键采纳所有具备生成方案的待修改语句（默认采用第一条推荐方案）"""
-    session = get_session(session_id)
-    if not session:
-        raise HTTPException(status_code=404, detail="会话不存在")
+    session, _ = session_and_user
+    session_id = session["session_id"]
     if session.get("status") == "processing":
         raise HTTPException(status_code=400, detail="后台正在全量检索与生成建议，请待完成后再一键采纳")
 

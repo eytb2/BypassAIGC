@@ -1,7 +1,7 @@
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Request
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Request, Query
 from sqlalchemy.orm import Session, defer
-from sqlalchemy import func, and_, case
-from typing import List
+from sqlalchemy import func, and_, or_, case
+from typing import List, Optional
 import json
 from app.database import get_db
 from app.models.models import User, OptimizationSession, OptimizationSegment, ChangeLog
@@ -148,9 +148,10 @@ async def list_sessions(
     card_key: str,
     limit: int = 50,
     offset: int = 0,
+    email: Optional[str] = Query(None),
     db: Session = Depends(get_db)
 ):
-    """列出用户的所有会话（普通用户仅看自己，管理员看全部并带邮箱信息）"""
+    """列出用户的所有会话（普通用户仅看自己，管理员看全部并带邮箱信息，支持按邮箱筛选）"""
     user = get_current_user(card_key, db)
     is_admin = is_admin_user(user)
     
@@ -160,7 +161,8 @@ async def list_sessions(
         OptimizationSession,
         func.length(OptimizationSession.original_text).label('original_char_count'),
         func.substring(OptimizationSession.original_text, 1, 50).label('preview_text'),
-        User.email.label('user_email')
+        User.email.label('user_email'),
+        User.is_admin.label('user_is_admin')
     ).outerjoin(
         User, OptimizationSession.user_id == User.id
     ).options(
@@ -170,16 +172,23 @@ async def list_sessions(
 
     if not is_admin:
         query = query.filter(OptimizationSession.user_id == user.id)
+    elif email and email != "all":
+        if email == "管理员自建":
+            query = query.filter(or_(OptimizationSession.user_id == 1, User.is_admin.is_(True)))
+        elif email == "未绑定邮箱":
+            query = query.filter(and_(User.email.is_(None), OptimizationSession.user_id != 1, or_(User.is_admin.is_(False), User.is_admin.is_(None))))
+        else:
+            query = query.filter(User.email == email)
 
     results = query.order_by(OptimizationSession.created_at.desc()).limit(limit).offset(offset).all()
 
     sessions = []
-    for session, char_count, preview_text, user_email in results:
+    for session, char_count, preview_text, user_email, user_is_admin in results:
         session.original_char_count = char_count or 0
         session.preview_text = preview_text or ""
         email_str = user_email
         if not email_str:
-            if session.user_id == 1:
+            if session.user_id == 1 or user_is_admin:
                 email_str = "管理员自建"
             else:
                 email_str = "未绑定邮箱"

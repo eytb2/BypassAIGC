@@ -312,6 +312,8 @@ const WordFormatterPage = () => {
 
   const handleLogout = () => {
     localStorage.removeItem('cardKey');
+    localStorage.removeItem('isAdmin');
+    localStorage.removeItem('userEmail');
     navigate('/');
   };
 

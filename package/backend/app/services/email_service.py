@@ -4,7 +4,7 @@ import ssl
 from email.header import Header
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-from email.utils import formataddr
+from email.utils import formataddr, formatdate, make_msgid
 from typing import Optional, Tuple
 
 from app.config import settings
@@ -30,11 +30,14 @@ def send_email(to_email: str, subject: str, html_content: str, text_content: str
         return True, "模拟发送成功（SMTP未配置完整）"
 
     from_addr = settings.SMTP_FROM or settings.SMTP_USER
+    domain = from_addr.split("@")[-1] if "@" in from_addr else None
 
     msg = MIMEMultipart("alternative")
     msg["Subject"] = Header(subject, "utf-8")
     msg["From"] = formataddr((str(Header("AI 学术写作助手", "utf-8")), from_addr))
     msg["To"] = to_email
+    msg["Date"] = formatdate(localtime=True)
+    msg["Message-ID"] = make_msgid(domain=domain)
 
     if text_content:
         part1 = MIMEText(text_content, "plain", "utf-8")
