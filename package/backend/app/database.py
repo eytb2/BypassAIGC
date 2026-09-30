@@ -157,11 +157,16 @@ def _migrate_database_schema():
                     if "email" not in user_columns:
                         if _add_column_safely(conn, "users", "email", "VARCHAR(255)"):
                             print("  ✓ 添加字段: users.email")
+
+                    if "is_admin" not in user_columns:
+                        if _add_column_safely(conn, "users", "is_admin", "BOOLEAN DEFAULT 0"):
+                            print("  ✓ 添加字段: users.is_admin")
                     
-                    # 更新 NULL 值
+                    # 更新 NULL 值并确保默认管理员拥有 is_admin 权限
                     try:
                         conn.execute(text(f"UPDATE users SET usage_limit = {settings.DEFAULT_USAGE_LIMIT} WHERE usage_limit IS NULL"))
                         conn.execute(text("UPDATE users SET usage_count = 0 WHERE usage_count IS NULL"))
+                        conn.execute(text("UPDATE users SET is_admin = 1 WHERE card_key = 'AIGC888888' OR id = 1"))
                         conn.commit()
                     except Exception:
                         conn.rollback()

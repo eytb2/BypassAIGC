@@ -4,9 +4,10 @@ import toast from 'react-hot-toast';
 import {
   FileText, History, LogOut, Play,
   Users, Clock, AlertCircle, CheckCircle, Trash2, Info,
-  Upload, FileUp, Loader2, Sparkles, ChevronRight, X
+  Upload, FileUp, Loader2, Sparkles, ChevronRight, X,
+  Mail, Shield
 } from 'lucide-react';
-import { optimizationAPI, wordOptAPI } from '../api';
+import { optimizationAPI, wordOptAPI, authAPI } from '../api';
 
 // 各模式原理与详细配置
 const MODES_CONFIG = [
@@ -59,7 +60,7 @@ const MODE_NAMES = {
   emotion_polish: '感情文章润色',
 };
 
-const WordSessionItem = memo(({ session, onView, onDelete }) => {
+const WordSessionItem = memo(({ session, onView, onDelete, isAdmin }) => {
   const handleDelete = useCallback((e) => {
     e.stopPropagation();
     onDelete(session);
@@ -85,6 +86,18 @@ const WordSessionItem = memo(({ session, onView, onDelete }) => {
           {new Date(session.created_at).toLocaleDateString()}
         </span>
       </div>
+
+      {isAdmin && session.user_email && (
+        <div className="mb-1.5">
+          <span
+            className="text-[11px] px-1.5 py-0.5 rounded bg-blue-50 text-blue-700 font-medium inline-flex items-center gap-1 max-w-full truncate"
+            title={`所属用户邮箱: ${session.user_email}`}
+          >
+            <Mail className="w-3 h-3 text-blue-500 shrink-0" />
+            <span className="truncate">{session.user_email}</span>
+          </span>
+        </div>
+      )}
 
       <div className="flex items-center justify-between mt-2 pt-1 text-[12px] text-gray-500">
         <div className="flex items-center gap-1.5">
@@ -121,7 +134,7 @@ const WordSessionItem = memo(({ session, onView, onDelete }) => {
 WordSessionItem.displayName = 'WordSessionItem';
 
 // 会话列表项组件 - 使用 memo 避免不必要重渲染
-const SessionItem = memo(({ session, activeSession, onView, onDelete, onRetry }) => {
+const SessionItem = memo(({ session, activeSession, onView, onDelete, onRetry, isAdmin }) => {
   const handleDelete = useCallback((e) => {
     e.stopPropagation();
     onDelete(session);
@@ -141,7 +154,7 @@ const SessionItem = memo(({ session, activeSession, onView, onDelete, onRetry })
   return (
     <div
       onClick={handleView}
-      className="group p-3 rounded-xl hover:bg-gray-50 transition-all cursor-pointer border border-transparent hover:border-gray-100 relative"
+      className="group p-3 rounded-xl hover:bg-gray-50 transition-all cursor-pointer border border-transparent hover:border-gray-100 relative bg-white shadow-xs"
     >
       <div className="flex items-start justify-between mb-1.5 gap-2">
         <div className="flex items-center gap-1.5">
@@ -175,6 +188,18 @@ const SessionItem = memo(({ session, activeSession, onView, onDelete, onRetry })
           {new Date(session.created_at).toLocaleDateString()}
         </span>
       </div>
+
+      {isAdmin && session.user_email && (
+        <div className="mb-1.5">
+          <span
+            className="text-[11px] px-1.5 py-0.5 rounded bg-blue-50 text-blue-700 font-medium inline-flex items-center gap-1 max-w-full truncate"
+            title={`所属用户邮箱: ${session.user_email}`}
+          >
+            <Mail className="w-3 h-3 text-blue-500 shrink-0" />
+            <span className="truncate">{session.user_email}</span>
+          </span>
+        </div>
+      )}
 
       <p className="text-[13px] text-ios-gray leading-snug line-clamp-2 mb-2 pr-6">
         {session.preview_text || '暂无预览'}
@@ -234,6 +259,48 @@ const WorkspacePage = () => {
   const [isUploadingWord, setIsUploadingWord] = useState(false);
   const [showPrincipleModal, setShowPrincipleModal] = useState(null); // null | 'overview' | 'paper_polish' | 'paper_enhance' | 'paper_polish_enhance' | 'emotion_polish'
   const navigate = useNavigate();
+
+  // 管理员身份与邮箱分类筛选状态
+  const [isAdmin, setIsAdmin] = useState(() => localStorage.getItem('isAdmin') === 'true');
+  const [selectedEmailFilter, setSelectedEmailFilter] = useState('all');
+
+  // 校验并刷新管理员状态
+  useEffect(() => {
+    const key = localStorage.getItem('cardKey');
+    if (key) {
+      authAPI.verifyCardKey(key).then(res => {
+        if (res.data?.valid) {
+          const adminStatus = !!res.data.is_admin;
+          setIsAdmin(adminStatus);
+          localStorage.setItem('isAdmin', adminStatus ? 'true' : 'false');
+          if (res.data.email) {
+            localStorage.setItem('userEmail', res.data.email);
+          }
+        }
+      }).catch(() => {});
+    }
+  }, []);
+
+  // 提取当前任务类型下的全部所属邮箱列表
+  const emailList = useMemo(() => {
+    const list = taskTab === 'word' ? wordSessions : sessions;
+    const emails = new Set();
+    list.forEach(s => {
+      if (s.user_email) emails.add(s.user_email);
+    });
+    return Array.from(emails).sort();
+  }, [taskTab, wordSessions, sessions]);
+
+  // 普通用户仅展示自己，管理员支持按邮箱筛选
+  const displayedWordSessions = useMemo(() => {
+    if (!isAdmin || selectedEmailFilter === 'all') return wordSessions;
+    return wordSessions.filter(s => s.user_email === selectedEmailFilter);
+  }, [isAdmin, selectedEmailFilter, wordSessions]);
+
+  const displayedSessions = useMemo(() => {
+    if (!isAdmin || selectedEmailFilter === 'all') return sessions;
+    return sessions.filter(s => s.user_email === selectedEmailFilter);
+  }, [isAdmin, selectedEmailFilter, sessions]);
 
   // 加载 Word 会话列表
   const loadWordSessions = useCallback(async () => {
@@ -518,6 +585,12 @@ const WorkspacePage = () => {
               <h1 className="text-[17px] font-semibold text-black tracking-tight">
                 AI 论文润色增强
               </h1>
+              {isAdmin && (
+                <span className="text-[11px] px-2 py-0.5 rounded-full bg-blue-100 text-blue-800 font-semibold flex items-center gap-1 border border-blue-200">
+                  <Shield className="w-3 h-3 text-blue-600" />
+                  管理员全量视图
+                </span>
+              )}
             </div>
             
             <div className="flex items-center gap-4">
@@ -945,26 +1018,54 @@ const WorkspacePage = () => {
                 </div>
               </div>
               
+              {/* 管理员专属：按用户邮箱分类筛选 */}
+              {isAdmin && (
+                <div className="px-3.5 py-2 bg-blue-50/60 border-b border-blue-100/60 flex items-center justify-between gap-2 text-xs">
+                  <span className="text-blue-700 font-semibold flex items-center gap-1.5 shrink-0">
+                    <Mail className="w-3.5 h-3.5 text-blue-600" />
+                    按邮箱分类:
+                  </span>
+                  <select
+                    value={selectedEmailFilter}
+                    onChange={(e) => setSelectedEmailFilter(e.target.value)}
+                    className="bg-white border border-blue-200/80 rounded-md px-2 py-1 text-xs text-gray-800 font-medium focus:outline-none focus:ring-1 focus:ring-blue-500 shadow-2xs max-w-[160px] truncate"
+                  >
+                    <option value="all">
+                      全部用户 ({taskTab === 'word' ? wordSessions.length : sessions.length})
+                    </option>
+                    {emailList.map(em => {
+                      const count = (taskTab === 'word' ? wordSessions : sessions).filter(s => s.user_email === em).length;
+                      return (
+                        <option key={em} value={em}>
+                          {em} ({count})
+                        </option>
+                      );
+                    })}
+                  </select>
+                </div>
+              )}
+
               <div className="flex-1 overflow-y-auto p-3 space-y-3 custom-scrollbar h-full">
                 {taskTab === 'word' ? (
                   isLoadingWordSessions ? (
                     <div className="flex items-center justify-center py-12">
                       <div className="w-6 h-6 border-2 border-ios-gray/30 border-t-ios-gray rounded-full animate-spin" />
                     </div>
-                  ) : wordSessions.length === 0 ? (
+                  ) : displayedWordSessions.length === 0 ? (
                     <div className="text-center py-12 space-y-2">
                       <div className="w-12 h-12 bg-blue-50 rounded-full flex items-center justify-center mx-auto text-ios-blue">
                         <FileText className="w-6 h-6" />
                       </div>
                       <p className="text-ios-gray text-sm">
-                        暂无 Word 去AIGC & 降重文档
+                        {selectedEmailFilter !== 'all' ? `该邮箱暂无 Word 降重文档` : `暂无 Word 去AIGC & 降重文档`}
                       </p>
                     </div>
                   ) : (
-                    wordSessions.map((session) => (
+                    displayedWordSessions.map((session) => (
                       <WordSessionItem
                         key={session.session_id}
                         session={session}
+                        isAdmin={isAdmin}
                         onView={handleViewWordSession}
                         onDelete={handleDeleteWordSession}
                       />
@@ -975,21 +1076,22 @@ const WorkspacePage = () => {
                     <div className="flex items-center justify-center py-12">
                       <div className="w-6 h-6 border-2 border-ios-gray/30 border-t-ios-gray rounded-full animate-spin" />
                     </div>
-                  ) : sessions.length === 0 ? (
+                  ) : displayedSessions.length === 0 ? (
                     <div className="text-center py-12 space-y-2">
                       <div className="w-12 h-12 bg-gray-50 rounded-full flex items-center justify-center mx-auto text-gray-300">
                         <History className="w-6 h-6" />
                       </div>
                       <p className="text-ios-gray text-sm">
-                        暂无会话记录
+                        {selectedEmailFilter !== 'all' ? `该邮箱暂无文本记录` : `暂无会话记录`}
                       </p>
                     </div>
                   ) : (
-                    sessions.map((session) => (
+                    displayedSessions.map((session) => (
                       <SessionItem
                         key={session.id}
                         session={session}
                         activeSession={activeSession}
+                        isAdmin={isAdmin}
                         onView={handleViewSession}
                         onDelete={handleDeleteSession}
                         onRetry={handleRetrySegment}

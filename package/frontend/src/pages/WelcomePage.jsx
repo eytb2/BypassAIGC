@@ -183,6 +183,8 @@ const WelcomePage = () => {
       
       if (response.data.valid) {
         setCardKey(activeKey);
+        localStorage.setItem('isAdmin', response.data.is_admin ? 'true' : 'false');
+        localStorage.setItem('userEmail', response.data.email || '');
         setShowWarning(true);
       }
     } catch (error) {

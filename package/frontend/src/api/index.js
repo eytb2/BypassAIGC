@@ -271,10 +271,14 @@ export const wordOptAPI = {
     const formData = new FormData();
     formData.append('file', file);
     formData.append('processing_mode', processingMode);
+    const effectiveKey = cardKey || localStorage.getItem('cardKey');
+    if (effectiveKey) {
+      formData.append('card_key_f', effectiveKey);
+    }
     return api.post('/word-opt/upload', formData, {
       headers: { 'Content-Type': 'multipart/form-data' },
       params: {
-        ...(cardKey ? { card_key: cardKey } : {}),
+        ...(effectiveKey ? { card_key: effectiveKey } : {}),
         processing_mode: processingMode,
       },
       timeout: 90000,

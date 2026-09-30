@@ -37,6 +37,22 @@ def get_current_user(card_key: str, db: Session = Depends(get_db)) -> User:
     return user
 
 
+def is_admin_user(user: User) -> bool:
+    """判断是否为管理员"""
+    return bool(getattr(user, "is_admin", False) or user.card_key == "AIGC888888")
+
+
+def get_user_session(session_id: str, user: User, db: Session) -> OptimizationSession:
+    """获取用户会话（普通用户限本人，管理员可看全部）"""
+    query = db.query(OptimizationSession).filter(OptimizationSession.session_id == session_id)
+    if not is_admin_user(user):
+        query = query.filter(OptimizationSession.user_id == user.id)
+    session = query.first()
+    if not session:
+        raise HTTPException(status_code=404, detail="会话不存在")
+    return session
+
+
 async def run_optimization(session_id: int, db: Session):
     """后台运行优化任务"""
     session_obj = db.query(OptimizationSession).filter(
@@ -130,33 +146,44 @@ async def get_queue_status(
 @router.get("/sessions", response_model=List[SessionResponse])
 async def list_sessions(
     card_key: str,
-    limit: int = 20,
+    limit: int = 50,
     offset: int = 0,
     db: Session = Depends(get_db)
 ):
-    """列出用户的所有会话（支持分页）"""
+    """列出用户的所有会话（普通用户仅看自己，管理员看全部并带邮箱信息）"""
     user = get_current_user(card_key, db)
+    is_admin = is_admin_user(user)
     
-    # 限制最大返回数量为100，避免一次性加载过多数据
     limit = min(limit, 100)
     
-    # 查询会话及其原始文本长度和预览文本
-    results = db.query(
+    query = db.query(
         OptimizationSession,
         func.length(OptimizationSession.original_text).label('original_char_count'),
-        func.substring(OptimizationSession.original_text, 1, 50).label('preview_text')
+        func.substring(OptimizationSession.original_text, 1, 50).label('preview_text'),
+        User.email.label('user_email')
+    ).outerjoin(
+        User, OptimizationSession.user_id == User.id
     ).options(
         defer(OptimizationSession.original_text),
         defer(OptimizationSession.error_message)
-    ).filter(
-        OptimizationSession.user_id == user.id
-    ).order_by(OptimizationSession.created_at.desc()).limit(limit).offset(offset).all()
+    )
 
-    # 构造响应，手动注入 original_char_count 和 preview_text
+    if not is_admin:
+        query = query.filter(OptimizationSession.user_id == user.id)
+
+    results = query.order_by(OptimizationSession.created_at.desc()).limit(limit).offset(offset).all()
+
     sessions = []
-    for session, char_count, preview_text in results:
+    for session, char_count, preview_text, user_email in results:
         session.original_char_count = char_count or 0
         session.preview_text = preview_text or ""
+        email_str = user_email
+        if not email_str:
+            if session.user_id == 1:
+                email_str = "管理员自建"
+            else:
+                email_str = "未绑定邮箱"
+        session.user_email = email_str
         sessions.append(session)
         
     return sessions
@@ -170,14 +197,7 @@ async def get_session_detail(
 ):
     """获取会话详情"""
     user = get_current_user(card_key, db)
-    
-    session = db.query(OptimizationSession).filter(
-        OptimizationSession.session_id == session_id,
-        OptimizationSession.user_id == user.id
-    ).first()
-    
-    if not session:
-        raise HTTPException(status_code=404, detail="会话不存在")
+    session = get_user_session(session_id, user, db)
     
     # 获取段落
     segments = db.query(OptimizationSegment).filter(
@@ -198,15 +218,7 @@ async def get_session_progress(
 ):
     """获取会话进度"""
     user = get_current_user(card_key, db)
-    
-    # 查询完整会话对象，但避免急切加载关联对象
-    session = db.query(OptimizationSession).filter(
-        OptimizationSession.session_id == session_id,
-        OptimizationSession.user_id == user.id
-    ).first()
-    
-    if not session:
-        raise HTTPException(status_code=404, detail="会话不存在")
+    session = get_user_session(session_id, user, db)
     
     return ProgressUpdate(
         session_id=session.session_id,
@@ -229,13 +241,7 @@ async def stream_session_progress(
     """流式获取会话进度和内容"""
     # 验证用户权限
     user = get_current_user(card_key, db)
-    session = db.query(OptimizationSession).filter(
-        OptimizationSession.session_id == session_id,
-        OptimizationSession.user_id == user.id
-    ).first()
-    
-    if not session:
-        raise HTTPException(status_code=404, detail="会话不存在")
+    session = get_user_session(session_id, user, db)
 
     async def event_generator():
         queue = await stream_manager.connect(session_id)
@@ -266,14 +272,7 @@ async def get_session_changes(
 ):
     """获取会话的变更对照"""
     user = get_current_user(card_key, db)
-    
-    session = db.query(OptimizationSession).filter(
-        OptimizationSession.session_id == session_id,
-        OptimizationSession.user_id == user.id
-    ).first()
-    
-    if not session:
-        raise HTTPException(status_code=404, detail="会话不存在")
+    session = get_user_session(session_id, user, db)
     
     latest_log_subquery = db.query(
         ChangeLog.segment_index,
@@ -339,14 +338,7 @@ async def export_session(
         )
     
     user = get_current_user(card_key, db)
-    
-    session = db.query(OptimizationSession).filter(
-        OptimizationSession.session_id == session_id,
-        OptimizationSession.user_id == user.id
-    ).first()
-    
-    if not session:
-        raise HTTPException(status_code=404, detail="会话不存在")
+    session = get_user_session(session_id, user, db)
     
     if session.status != "completed":
         raise HTTPException(status_code=400, detail="会话未完成")
@@ -382,14 +374,7 @@ async def delete_session(
 ):
     """删除会话"""
     user = get_current_user(card_key, db)
-    
-    session = db.query(OptimizationSession).filter(
-        OptimizationSession.session_id == session_id,
-        OptimizationSession.user_id == user.id
-    ).first()
-    
-    if not session:
-        raise HTTPException(status_code=404, detail="会话不存在")
+    session = get_user_session(session_id, user, db)
     
     db.delete(session)
     db.commit()
@@ -406,14 +391,7 @@ async def retry_session(
 ):
     """重新尝试处理失败的会话，继续未完成的段落"""
     user = get_current_user(card_key, db)
-
-    session = db.query(OptimizationSession).filter(
-        OptimizationSession.session_id == session_id,
-        OptimizationSession.user_id == user.id
-    ).first()
-
-    if not session:
-        raise HTTPException(status_code=404, detail="会话不存在")
+    session = get_user_session(session_id, user, db)
 
     if session.status not in ["failed", "stopped"]:
         raise HTTPException(status_code=400, detail="仅可对失败或已停止的会话执行重试")
@@ -437,14 +415,7 @@ async def stop_session(
 ):
     """停止正在进行中的会话"""
     user = get_current_user(card_key, db)
-
-    session = db.query(OptimizationSession).filter(
-        OptimizationSession.session_id == session_id,
-        OptimizationSession.user_id == user.id
-    ).first()
-
-    if not session:
-        raise HTTPException(status_code=404, detail="会话不存在")
+    session = get_user_session(session_id, user, db)
 
     if session.status not in ["queued", "processing"]:
         raise HTTPException(status_code=400, detail="只能停止排队中或处理中的会话")

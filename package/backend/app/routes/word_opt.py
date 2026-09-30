@@ -81,7 +81,9 @@ async def upload_docx(
     processing_mode: Optional[str] = Form(None),
     mode_q: Optional[str] = Query(None, alias="processing_mode"),
     background_tasks: BackgroundTasks = None,
-    card_key: Optional[str] = Query(None)
+    card_key: Optional[str] = Query(None),
+    card_key_f: Optional[str] = Form(None),
+    db: Session = Depends(get_db)
 ):
     """上传 Word (.docx) 文件并初始化降重分析会话"""
     if not file.filename.lower().endswith(".docx"):
@@ -92,13 +94,28 @@ async def upload_docx(
     if mode not in valid_modes:
         mode = "paper_polish_enhance"
 
+    effective_card_key = card_key or card_key_f
+    user = None
+    if effective_card_key:
+        user = db.query(User).filter(User.card_key == effective_card_key, User.is_active.is_(True)).first()
+
+    user_id = user.id if user else None
+    user_email = user.email if user else None
+
     # 临时落盘
     with tempfile.NamedTemporaryFile(delete=False, suffix=".docx") as tmp:
         shutil.copyfileobj(file.file, tmp)
         tmp_path = tmp.name
 
     try:
-        session_data = parse_docx_to_session(tmp_path, file.filename, processing_mode=mode)
+        session_data = parse_docx_to_session(
+            tmp_path,
+            file.filename,
+            processing_mode=mode,
+            user_id=user_id,
+            user_email=user_email,
+            card_key=effective_card_key
+        )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Word 文档解析失败: {str(e)}")
     finally:
@@ -275,17 +292,46 @@ async def export_word(session_id: str):
 
 
 @router.get("/sessions")
-async def list_word_sessions(card_key: Optional[str] = Query(None)):
-    """获取 Word 降重历史会话列表"""
-    return list_sessions()
+async def list_word_sessions(
+    card_key: Optional[str] = Query(None),
+    db: Session = Depends(get_db)
+):
+    """获取 Word 降重历史会话列表（按用户或管理员权限隔离）"""
+    if not card_key:
+        raise HTTPException(status_code=401, detail="缺少卡密")
+
+    user = db.query(User).filter(User.card_key == card_key, User.is_active.is_(True)).first()
+    if not user:
+        raise HTTPException(status_code=401, detail="无效的卡密")
+
+    is_admin = bool(getattr(user, "is_admin", False) or user.card_key == "AIGC888888")
+
+    user_dict = None
+    if is_admin:
+        all_users = db.query(User).all()
+        user_dict = {u.id: {"email": u.email, "is_admin": getattr(u, "is_admin", False)} for u in all_users}
+
+    return list_sessions(user_id=user.id, is_admin=is_admin, user_dict=user_dict)
 
 
 @router.delete("/session/{session_id}")
-async def remove_word_session(session_id: str):
-    """删除指定 Word 会话"""
-    success = delete_session(session_id)
+async def remove_word_session(
+    session_id: str,
+    card_key: Optional[str] = Query(None),
+    db: Session = Depends(get_db)
+):
+    """删除指定 Word 会话（仅所有者或管理员可删）"""
+    if not card_key:
+        raise HTTPException(status_code=401, detail="缺少卡密")
+
+    user = db.query(User).filter(User.card_key == card_key, User.is_active.is_(True)).first()
+    if not user:
+        raise HTTPException(status_code=401, detail="无效的卡密")
+
+    is_admin = bool(getattr(user, "is_admin", False) or user.card_key == "AIGC888888")
+    success = delete_session(session_id, user_id=user.id, is_admin=is_admin)
     if not success:
-        raise HTTPException(status_code=404, detail="会话不存在")
+        raise HTTPException(status_code=404, detail="会话不存在或无权删除")
     return {"message": "会话已删除"}
 
 

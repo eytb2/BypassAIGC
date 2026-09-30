@@ -315,7 +315,14 @@ def split_paragraph_into_spans(
     return spans
 
 
-def parse_docx_to_session(file_path: str, filename: str, processing_mode: str = "paper_polish_enhance") -> Dict[str, Any]:
+def parse_docx_to_session(
+    file_path: str,
+    filename: str,
+    processing_mode: str = "paper_polish_enhance",
+    user_id: Optional[int] = None,
+    user_email: Optional[str] = None,
+    card_key: Optional[str] = None
+) -> Dict[str, Any]:
     """读取 docx 并构建文档的结构化 AST / Session 数据"""
     session_id = str(uuid.uuid4())
     session_dir = os.path.join(DATA_DIR, session_id)
@@ -382,6 +389,9 @@ def parse_docx_to_session(file_path: str, filename: str, processing_mode: str = 
         "total_sentences": total_sentences,
         "need_mod_count": need_mod_count,
         "modified_count": 0,
+        "user_id": user_id,
+        "user_email": user_email,
+        "card_key": card_key,
         "paragraphs": paragraphs
     }
 
@@ -427,8 +437,12 @@ def get_session(session_id: str) -> Optional[Dict[str, Any]]:
     return None
 
 
-def list_sessions() -> List[Dict[str, Any]]:
-    """列出所有 Word 降重会话"""
+def list_sessions(
+    user_id: Optional[int] = None,
+    is_admin: bool = False,
+    user_dict: Optional[Dict[int, Dict[str, Any]]] = None
+) -> List[Dict[str, Any]]:
+    """列出 Word 降重会话（普通用户仅看本人，管理员看全量且按邮箱展示）"""
     sessions = []
     if not os.path.exists(DATA_DIR):
         return sessions
@@ -439,6 +453,24 @@ def list_sessions() -> List[Dict[str, Any]]:
             try:
                 with open(json_path, "r", encoding="utf-8") as f:
                     data = json.load(f)
+                    s_user_id = data.get("user_id")
+
+                    # 权限过滤：非管理员只能查看属于自己的会话
+                    if not is_admin:
+                        # 历史未标记数据默认归管理员，普通用户不可见
+                        if s_user_id is None or s_user_id != user_id:
+                            continue
+
+                    # 计算展示用邮箱（管理员视角下展示邮箱而非卡密）
+                    email = data.get("user_email")
+                    if not email and user_dict and s_user_id in user_dict:
+                        email = user_dict[s_user_id].get("email")
+                    if not email:
+                        if s_user_id == 1 or data.get("card_key") == "AIGC888888":
+                            email = "管理员自建"
+                        else:
+                            email = "未绑定邮箱"
+
                     sessions.append({
                         "session_id": data["session_id"],
                         "filename": data["filename"],
@@ -451,7 +483,9 @@ def list_sessions() -> List[Dict[str, Any]]:
                         "total_to_process": data.get("total_to_process", data.get("need_mod_count", 0)),
                         "need_mod_count": data.get("need_mod_count", 0),
                         "modified_count": data.get("modified_count", 0),
-                        "total_paragraphs": data.get("total_paragraphs", 0)
+                        "total_paragraphs": data.get("total_paragraphs", 0),
+                        "user_id": s_user_id,
+                        "user_email": email
                     })
             except Exception:
                 continue
@@ -460,8 +494,15 @@ def list_sessions() -> List[Dict[str, Any]]:
     return sessions
 
 
-def delete_session(session_id: str) -> bool:
-    """删除会话目录及文件"""
+def delete_session(session_id: str, user_id: Optional[int] = None, is_admin: bool = False) -> bool:
+    """删除会话目录及文件（带权限校验）"""
+    session = get_session(session_id)
+    if not session:
+        return False
+    if not is_admin and user_id is not None:
+        if session.get("user_id") != user_id:
+            return False
+
     session_dir = os.path.join(DATA_DIR, session_id)
     if os.path.exists(session_dir):
         import shutil

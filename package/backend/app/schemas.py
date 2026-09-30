@@ -20,6 +20,7 @@ class UserResponse(BaseModel):
     usage_limit: int
     usage_count: int
     email: Optional[str] = None
+    is_admin: bool = False
     
     class Config:
         from_attributes = True
@@ -72,6 +73,7 @@ class SessionResponse(BaseModel):
     preview_text: Optional[str] = None
     error_message: Optional[str] = None
     processing_mode: str = 'paper_polish_enhance'
+    user_email: Optional[str] = None
     created_at: datetime
     updated_at: datetime
     completed_at: Optional[datetime] = None

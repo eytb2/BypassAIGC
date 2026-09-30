@@ -13,6 +13,7 @@ class User(Base):
     card_key = Column(String(255), unique=True, index=True, nullable=False)
     access_link = Column(String(255), unique=True, index=True, nullable=False)
     is_active = Column(Boolean, default=True)
+    is_admin = Column(Boolean, default=False)
     created_at = Column(DateTime, default=datetime.utcnow)
     last_used = Column(DateTime, nullable=True)
     usage_limit = Column(Integer, default=settings.DEFAULT_USAGE_LIMIT)
