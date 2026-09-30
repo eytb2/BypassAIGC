@@ -1,8 +1,10 @@
 import logging
 import smtplib
 import ssl
+from email.header import Header
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from email.utils import formataddr
 from typing import Optional, Tuple
 
 from app.config import settings
@@ -30,8 +32,8 @@ def send_email(to_email: str, subject: str, html_content: str, text_content: str
     from_addr = settings.SMTP_FROM or settings.SMTP_USER
 
     msg = MIMEMultipart("alternative")
-    msg["Subject"] = subject
-    msg["From"] = f"AI 学术写作助手 <{from_addr}>"
+    msg["Subject"] = Header(subject, "utf-8")
+    msg["From"] = formataddr((str(Header("AI 学术写作助手", "utf-8")), from_addr))
     msg["To"] = to_email
 
     if text_content:
