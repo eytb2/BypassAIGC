@@ -15,14 +15,38 @@ def get_exe_dir():
 
 
 def get_env_file_path():
-    """获取 .env 文件路径"""
-    return os.path.join(get_exe_dir(), '.env')
+    """获取 .env 文件路径，支持环境变量、容器根目录与父目录候选探测"""
+    # 1. 优先环境变量
+    env_from_os = os.environ.get("ENV_FILE")
+    if env_from_os and os.path.exists(env_from_os):
+        return env_from_os
+
+    # 2. 常见候选路径
+    exe_dir = get_exe_dir()
+    candidates = [
+        os.path.join(exe_dir, '.env'),
+        '/app/.env',
+        os.path.join(os.path.dirname(exe_dir), '.env'),
+        os.path.join(os.getcwd(), '.env'),
+    ]
+    for p in candidates:
+        if os.path.exists(p):
+            return p
+
+    return candidates[0]
 
 
 def get_default_database_url():
-    """获取默认数据库 URL，指向 exe 同目录"""
+    """获取默认数据库 URL，指向 exe 同目录或容器路径"""
+    if os.environ.get("DATABASE_URL"):
+        return os.environ["DATABASE_URL"]
     exe_dir = get_exe_dir()
     db_path = os.path.join(exe_dir, 'ai_polish.db')
+    if not os.path.exists(db_path):
+        for candidate in ['/app/ai_polish.db', os.path.join(os.path.dirname(exe_dir), 'ai_polish.db')]:
+            if os.path.exists(candidate):
+                db_path = candidate
+                break
     return f"sqlite:///{db_path}"
 
 

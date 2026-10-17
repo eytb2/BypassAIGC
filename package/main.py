@@ -28,6 +28,7 @@ os.chdir(APP_DIR)
 
 # 设置环境变量指向 exe 同目录的 .env 文件
 ENV_FILE = os.path.join(APP_DIR, '.env')
+os.environ['ENV_FILE'] = ENV_FILE
 DB_FILE = os.path.join(APP_DIR, 'ai_polish.db')
 
 # 加载环境变量
